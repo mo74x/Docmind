@@ -5,6 +5,7 @@ import { BullModule } from '@nestjs/bullmq';
 import configuration from './config/configuration';
 import { Document } from './documents/document.entity';
 import { Chunk } from './documents/chunk.entity';
+import { EmbeddingsModule } from './embeddings/embeddings.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { Chunk } from './documents/chunk.entity';
         },
       }),
     }),
+    EmbeddingsModule,
   ],
 })
 export class AppModule {}
