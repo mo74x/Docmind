@@ -7,6 +7,7 @@ import { Document } from './documents/document.entity';
 import { Chunk } from './documents/chunk.entity';
 import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { IngestionModule } from './ingestion/ingestion.module';
+import { DocumentsModule } from './documents/documents.module';
 
 @Module({
   imports: [
@@ -26,7 +27,6 @@ import { IngestionModule } from './ingestion/ingestion.module';
         synchronize: true,
       }),
     }),
-
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -39,6 +39,7 @@ import { IngestionModule } from './ingestion/ingestion.module';
     }),
     EmbeddingsModule,
     IngestionModule,
+    DocumentsModule,
   ],
 })
 export class AppModule {}
