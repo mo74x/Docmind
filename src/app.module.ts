@@ -12,6 +12,7 @@ import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { DocumentsModule } from './documents/documents.module';
 import { QueryModule } from './query/query.module';
+import { RedisModule } from './redis/redis.module';
 import { ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import Redis from 'ioredis';
@@ -23,6 +24,7 @@ import Redis from 'ioredis';
       isGlobal: true,
       load: [configuration],
     }),
+    RedisModule,
     // Configure PostgreSQL
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
