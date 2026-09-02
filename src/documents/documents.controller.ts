@@ -1,4 +1,6 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+import { Controller, Post, Body, Get, Param, Delete } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
@@ -39,5 +41,21 @@ export class DocumentsController {
       failureReason: document.failureReason,
       createdAt: document.createdAt,
     };
+  }
+
+  @Delete(':id')
+  @ApiOperation({
+    summary: 'Delete a document and all its associated vector chunks',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Document and associated chunks deleted successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Document with the specified ID was not found',
+  })
+  remove(@Param('id') id: string) {
+    return this.documentsService.remove(id);
   }
 }

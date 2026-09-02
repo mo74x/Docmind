@@ -6,6 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: WinstonModule.createLogger({
@@ -28,6 +30,9 @@ async function bootstrap() {
     }),
   });
   const configService = app.get(ConfigService);
+
+  // Enable global exception filter
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   // Enable automatic DTO validation
   app.useGlobalPipes(

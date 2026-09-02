@@ -420,11 +420,24 @@ Queues a new document for background chunking, embedding, and vector indexing.
 }
 ```
 
+#### 4. Delete Document
+`DELETE /documents/:id`
+
+Deletes a document record and purges all associated text chunks and vector embeddings from PostgreSQL.
+
+**Response (`200 OK`)**
+```json
+{
+  "message": "Document and associated chunks deleted successfully",
+  "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b"
+}
+```
+
 ---
 
 ### Query & Retrieval Endpoints
 
-#### 4. Semantic Vector Search
+#### 5. Semantic Vector Search
 `POST /query/search`
 
 Performs vector similarity search over all `READY` document chunks. Throttled to **20 requests/minute**.
@@ -454,7 +467,7 @@ Performs vector similarity search over all `READY` document chunks. Throttled to
 }
 ```
 
-#### 5. Ask Question (RAG with Citations)
+#### 6. Ask Question (RAG with Citations)
 `POST /query/ask`
 
 Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a grounded answer with inline citations, and caches the result in Redis. Throttled to **5 requests/minute**.
@@ -487,7 +500,7 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 
 ### Observability Endpoints
 
-#### 6. Prometheus Metrics
+#### 7. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -523,6 +536,53 @@ vector_search_latency_seconds_bucket{le="0.1"} 42
 vector_search_latency_seconds_bucket{le="+Inf"} 42
 vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
+```
+
+#### 8. Health Check
+`GET /health`
+
+Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.
+
+**Response (`200 OK`)**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-09-02T13:00:00.000Z",
+  "uptimeSeconds": 3600,
+  "responseTimeMs": 4,
+  "memory": {
+    "heapUsedMb": 45.12,
+    "heapTotalMb": 62.45,
+    "rssMb": 98.32
+  },
+  "services": {
+    "database": {
+      "status": "up",
+      "latencyMs": 2
+    },
+    "redis": {
+      "status": "up",
+      "latencyMs": 1
+    }
+  }
+}
+```
+
+---
+
+### Standardized Error Format
+
+All exceptions (both HTTP client errors and unhandled server errors) are intercepted by the global `AllExceptionsFilter` and returned in a unified JSON structure:
+
+```json
+{
+  "statusCode": 404,
+  "timestamp": "2026-09-02T13:00:00.000Z",
+  "path": "/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+  "method": "DELETE",
+  "error": "Not Found",
+  "message": "Document with ID c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b not found"
+}
 ```
 
 ---
@@ -610,6 +670,7 @@ npm run start:prod
 |:---|:---|
 | `http://localhost:3000` | API Server |
 | `http://localhost:3000/api/docs` | Interactive Swagger UI |
+| `http://localhost:3000/health` | Health Check (DB & Redis) |
 | `http://localhost:3000/metrics` | Prometheus Metrics |
 
 ---
@@ -623,17 +684,23 @@ docmind/
 ├── package.json
 ├── tsconfig.json
 ├── src/
-│   ├── main.ts                     # Bootstrap, Swagger, Winston Logger & Global Validation
-│   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus)
+│   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
+│   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
+│   ├── common/
+│   │   └── filters/
+│   │       └── all-exceptions.filter.ts # Global exception filter & structured error logging
 │   ├── config/
 │   │   └── configuration.ts        # Config loader & environment parsing
+│   ├── health/
+│   │   ├── health.controller.ts    # DB & Redis connectivity & uptime health probe
+│   │   └── health.module.ts
 │   ├── migrations/
 │   │   └── run-pgvector.ts         # pgvector extension & ivfflat index migration
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
 │   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) column
-│   │   ├── documents.controller.ts # Document ingestion & status endpoints
-│   │   ├── documents.service.ts    # Document state management & queue producer
+│   │   ├── documents.controller.ts # Ingestion, status, & DELETE endpoints
+│   │   ├── documents.service.ts    # Document state management, queue producer & deletion
 │   │   ├── documents.module.ts
 │   │   └── dto/
 │   │       └── ingest-document.dto.ts

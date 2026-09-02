@@ -17,6 +17,8 @@ import { ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import Redis from 'ioredis';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
+import { HealthModule } from './health/health.module';
+
 @Module({
   imports: [
     // Load Environment Variables
@@ -74,6 +76,7 @@ import { PrometheusModule } from '@willsoto/nestjs-prometheus';
     IngestionModule,
     DocumentsModule,
     QueryModule,
+    HealthModule,
   ],
 })
 export class AppModule {}

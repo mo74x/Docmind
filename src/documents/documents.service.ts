@@ -8,6 +8,7 @@ import { IngestDocumentDto } from './dto/ingest-document.dto';
 
 @Injectable()
 export class DocumentsService {
+  [x: string]: any;
   constructor(
     @InjectRepository(Document)
     private readonly documentRepo: Repository<Document>,
