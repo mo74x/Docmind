@@ -6,6 +6,7 @@ import configuration from './config/configuration';
 import { Document } from './documents/document.entity';
 import { Chunk } from './documents/chunk.entity';
 import { EmbeddingsModule } from './embeddings/embeddings.module';
+import { IngestionModule } from './ingestion/ingestion.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { EmbeddingsModule } from './embeddings/embeddings.module';
       }),
     }),
     EmbeddingsModule,
+    IngestionModule,
   ],
 })
 export class AppModule {}
