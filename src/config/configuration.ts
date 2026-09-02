@@ -20,4 +20,8 @@ export default () => ({
     size: parseInt(process.env.CHUNK_SIZE_CHARS || '1200', 10),
     overlap: parseInt(process.env.CHUNK_OVERLAP_CHARS || '200', 10),
   },
+  rateLimit: {
+    ttl: parseInt(process.env.RATE_LIMIT_TTL || '60000', 10),
+    limit: parseInt(process.env.RATE_LIMIT_MAX || '10', 10),
+  },
 });
