@@ -1,173 +1,144 @@
-<p align="center">
-  <b>RAG-Based Document Question Answering Backend</b>
-  <br/>
-  Built with NestJS | PostgreSQL 16 + pgvector | Redis 7 | BullMQ | OpenAI
-</p>
+# DocMind
+
+Document Ingestion and Retrieval-Augmented Generation (RAG) Backend built with NestJS, PostgreSQL (`pgvector`), Redis (`BullMQ`), and OpenAI.
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [System Architecture](#system-architecture)
+- [Architecture](#architecture)
 - [Technology Stack](#technology-stack)
-- [Core Features](#core-features)
-- [Database Domain Model](#database-domain-model)
+- [System Design](#system-design)
+- [Database Schema](#database-schema)
 - [Ingestion Pipeline](#ingestion-pipeline)
 - [API Reference](#api-reference)
-- [Environment Variables](#environment-variables)
-- [Local Development and Setup](#local-development-and-setup)
+- [Environment Configuration](#environment-configuration)
+- [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
-- [Roadmap](#roadmap)
-- [Design Decisions](#design-decisions)
 
 ---
 
 ## Overview
 
-**DocMind** is a Retrieval-Augmented Generation (RAG) backend that ingests
-documents, splits and embeds them, and stores the resulting vectors in
-PostgreSQL via the `pgvector` extension. Once ingested, documents become
-queryable: a question is embedded with the same model, matched against
-stored chunks by cosine similarity, and (from Phase 2 onward) used to
-build a grounded, source-cited answer via an LLM.
+DocMind is a backend service designed for asynchronous document ingestion, chunking, embedding generation, and vector-based semantic retrieval.
 
-The system is built around the same architectural patterns already
-proven in [Hwala](https://github.com/mo74x/Hwala) and FleetPulse —
-BullMQ-driven async processing, PostgreSQL as the single source of
-truth, and status-tracked long-running operations that a client can
-poll rather than block on.
+When a document is submitted:
+1. It is stored with a `PENDING` state and queued for background processing.
+2. A worker chunks the text using boundary-aware splitting (paragraphs, sentences) to preserve context across splits.
+3. Chunks are embedded in batches via OpenAI's embedding API.
+4. Chunks and their 1536-dimensional vector embeddings are stored in PostgreSQL using the `pgvector` extension.
+5. The document status updates across lifecycle states (`PENDING` -> `CHUNKING` -> `EMBEDDING` -> `READY` or `FAILED`).
 
 ---
 
-## System Architecture
+## Architecture
 
 ```mermaid
 graph TB
-    subgraph "Client"
-        API_CLIENT[API Consumer]
+    subgraph "Clients"
+        API_CLIENT[HTTP Client / API Consumer]
     end
 
     subgraph "API Layer"
+        CONTROLLER[Documents Controller]
         VALIDATION[DTO Validation Pipeline]
-        SWAGGER[Swagger / OpenAPI Docs]
+        SWAGGER[Swagger UI / OpenAPI]
     end
 
     subgraph "Application Layer"
-        DOC_MOD[Documents Module]
-        QUERY_MOD[Query Module - Phase 2]
+        DOC_SVC[Documents Service]
+        EMBED_SVC[Embeddings Service]
+        CHUNK_UTIL[Chunking Utility]
     end
 
-    subgraph "Background Processing"
+    subgraph "Job Processing"
         BULLMQ[BullMQ Ingestion Queue]
         WORKER[Ingestion Processor]
-        CHUNK[Chunking Utility]
-        EMBED[Embeddings Service]
     end
 
-    subgraph "Data Layer"
-        PG[(PostgreSQL 16 + pgvector<br/>Documents and Chunks)]
-        REDIS[(Redis 7<br/>BullMQ Job Store)]
+    subgraph "Persistence"
+        PG[(PostgreSQL 16 + pgvector)]
+        REDIS[(Redis 7)]
     end
 
-    subgraph "External"
-        OPENAI[OpenAI Embeddings + Chat API]
+    subgraph "External Services"
+        OPENAI[OpenAI Embeddings API]
     end
 
-    API_CLIENT --> VALIDATION --> DOC_MOD
-    DOC_MOD -->|enqueue| BULLMQ
+    API_CLIENT --> CONTROLLER
+    CONTROLLER --> VALIDATION
+    CONTROLLER --> DOC_SVC
+    DOC_SVC -->|save document & query state| PG
+    DOC_SVC -->|enqueue job| BULLMQ
     BULLMQ --> REDIS
     BULLMQ --> WORKER
-    WORKER --> CHUNK
-    WORKER --> EMBED
-    EMBED --> OPENAI
-    WORKER -->|store chunks + vectors| PG
-    DOC_MOD -->|read status| PG
-    QUERY_MOD -.->|Phase 2| PG
-    QUERY_MOD -.->|Phase 2| OPENAI
+    WORKER --> CHUNK_UTIL
+    WORKER --> EMBED_SVC
+    EMBED_SVC --> OPENAI
+    WORKER -->|batch insert chunks & vectors| PG
+    WORKER -->|update status| PG
 ```
 
 ---
 
 ## Technology Stack
 
-| Layer | Technology | Description |
+| Layer | Component | Details |
 |:---|:---|:---|
-| **Runtime** | Node.js 20+ | LTS JavaScript runtime |
-| **Framework** | NestJS 10 | TypeScript framework with modular architecture and dependency injection |
-| **Language** | TypeScript 5.5 | Strict type-safe development |
-| **Database** | PostgreSQL 16 | Stores documents, chunks, and metadata |
-| **Vector Search** | pgvector | Postgres extension for vector storage and cosine-similarity search (`ivfflat` index) |
-| **ORM** | TypeORM 0.3 | Entity mapping for documents/chunks; raw parameterized queries for vector operations (no query-builder support for `<->`) |
-| **Queue** | BullMQ + Redis 7 | Async ingestion pipeline: chunking, batched embedding, storage |
-| **Embeddings** | OpenAI `text-embedding-3-small` | 1536-dimension embeddings, configurable via env |
-| **Generation** | OpenAI `gpt-4o-mini` | Grounded answer generation (Phase 3) |
-| **Validation** | class-validator / class-transformer | Request DTO validation |
-| **API Documentation** | Swagger / OpenAPI | Interactive docs at `/api/docs` |
-| **Containerization** | Docker Compose | Local Postgres (pgvector image) + Redis |
+| **Runtime** | Node.js | v20+ LTS |
+| **Framework** | NestJS | v11 modular backend framework |
+| **Language** | TypeScript | v5.7 with strict type checking |
+| **Database** | PostgreSQL 16 | Relational storage for documents and chunks |
+| **Vector Engine** | `pgvector` | Native vector data type and `ivfflat` similarity indexing |
+| **ORM** | TypeORM | Entity mappings and relational queries; raw SQL for vector operations |
+| **Job Queue** | BullMQ + Redis 7 | Distributed queue for background document processing |
+| **Embeddings** | OpenAI API | `text-embedding-3-small` (1536 dimensions) |
+| **Validation** | `class-validator` / `class-transformer` | Request payload validation and transformation |
+| **API Docs** | Swagger / OpenAPI | Auto-generated interactive API documentation |
 
 ---
 
-## Core Features
+## System Design
 
-### Document Ingestion (Phase 1 — built)
+### Asynchronous Ingestion & State Tracking
 
-A document is submitted as raw text via `POST /documents`, saved with
-`PENDING` status, and enqueued as a BullMQ job. A worker then:
+Document processing (tokenization, chunking, external API embedding calls, vector persistence) is decoupled from HTTP request lifecycles. HTTP endpoints return immediately with a job identifier and initial status, preventing client timeouts on large documents.
 
-1. Splits the text into overlapping chunks, preferring paragraph or
-   sentence boundaries over hard character cuts
-2. Embeds chunks in batches (not one API call per chunk) to reduce
-   request count and stay within rate limits
-3. Stores each chunk alongside its vector in PostgreSQL via a raw
-   parameterized query, since TypeORM's query builder has no first-class
-   support for the pgvector column type or its `<->` distance operator
-4. Updates the document's status through `chunking → embedding → ready`,
-   or `failed` with a captured error reason
+Document lifecycle states:
+- `PENDING`: Document record created, ingestion job enqueued.
+- `CHUNKING`: Text is being split into overlapping segments.
+- `EMBEDDING`: Text chunks are being sent to OpenAI for vector generation.
+- `READY`: All chunks and embeddings are persisted; document is available for retrieval.
+- `FAILED`: Processing failed; error details stored in `failureReason`.
 
-BullMQ retries failed jobs three times with exponential backoff before
-marking the document `FAILED` — the same resilience pattern used for
-Hwala's webhook dispatcher.
+### Boundary-Aware Chunking
 
-### Deterministic Chunking
+Text splitting prioritizes natural content boundaries:
+1. Double newlines (paragraphs)
+2. Single newlines / punctuation (sentences)
+3. Fallback to character counts if no boundary exists within the chunk threshold
 
-Chunking prefers paragraph breaks, then sentence breaks, and only falls
-back to a hard character cut if neither boundary is found near the
-target chunk size. Overlap between consecutive chunks preserves context
-that would otherwise be lost at a chunk boundary — a fact split exactly
-at the cut point is unretrievable no matter how good the embedding
-model is.
+Overlap between sequential chunks prevents loss of semantic context at boundary cutoffs.
 
-### Vector Storage via pgvector
+### Vector Storage
 
-Rather than introducing a separate vector database, embeddings are
-stored as a native `vector(1536)` column on the `chunks` table, indexed
-with `ivfflat` for approximate cosine-similarity search. This keeps
-the system on infrastructure already in use elsewhere (Hwala,
-FleetPulse) instead of adding a new operational dependency.
-
-### Status Polling
-
-Ingestion is asynchronous by design — large documents can take longer
-to chunk and embed than a single HTTP request should block for. Clients
-poll `GET /documents/:id` to observe status transitions and pick up the
-document as soon as it's `READY`.
+Embeddings are stored directly in PostgreSQL using a `vector(1536)` column on the `chunks` table. This removes the operational complexity of maintaining a separate vector database while enabling transactional consistency between document metadata and chunk vectors.
 
 ---
 
-## Database Domain Model
+## Database Schema
 
 ```mermaid
 erDiagram
-    Document ||--o{ Chunk : "split into"
+    Document ||--o{ Chunk : "contains"
 
     Document {
         uuid id PK
         string title
         text sourceContent
-        string sourceUrl
         enum status "PENDING | CHUNKING | EMBEDDING | READY | FAILED"
-        string failureReason
+        text failureReason
         datetime createdAt
     }
 
@@ -176,7 +147,7 @@ erDiagram
         uuid documentId FK
         int chunkIndex
         text content
-        vector embedding "vector(1536), pgvector"
+        vector embedding "vector(1536)"
         datetime createdAt
     }
 ```
@@ -187,163 +158,192 @@ erDiagram
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant Client
-    participant API as Documents API
-    participant Queue as BullMQ
+    participant API as Documents Controller
+    participant Service as Documents Service
+    participant Queue as BullMQ Queue
     participant Worker as Ingestion Processor
     participant Chunker as Chunking Utility
     participant Embedder as Embeddings Service
-    participant OpenAI
-    participant DB as PostgreSQL
+    participant OpenAI as OpenAI API
+    participant DB as PostgreSQL (pgvector)
 
     Client->>API: POST /documents (title, content)
-    API->>DB: INSERT document (status=PENDING)
-    API->>Queue: enqueue ingest job
-    API-->>Client: 201 Created (id, status)
+    API->>Service: submitDocument(dto)
+    Service->>DB: INSERT Document (status: PENDING)
+    Service->>Queue: add("ingest-doc", { documentId })
+    Service-->>API: Document entity
+    API-->>Client: 201 Created { id, status: PENDING }
 
-    Queue->>Worker: process job
-    Worker->>DB: UPDATE status=CHUNKING
-    Worker->>Chunker: chunkText(content)
-    Chunker-->>Worker: overlapping passages
+    Queue->>Worker: process(job)
+    Worker->>DB: UPDATE Document SET status = 'CHUNKING'
+    Worker->>Chunker: chunkText(sourceContent, options)
+    Chunker-->>Worker: string[] chunks
 
-    Worker->>DB: UPDATE status=EMBEDDING
-    loop batches of 20 chunks
-        Worker->>Embedder: embedBatch(texts)
-        Embedder->>OpenAI: POST /embeddings
-        OpenAI-->>Embedder: vectors
-        Worker->>DB: INSERT chunk + vector (raw query)
+    Worker->>DB: UPDATE Document SET status = 'EMBEDDING'
+    loop Batches of 20 chunks
+        Worker->>Embedder: embedBatch(chunkBatch)
+        Embedder->>OpenAI: POST /v1/embeddings
+        OpenAI-->>Embedder: number[][] vectors
+        Worker->>DB: INSERT INTO chunks (document_id, chunk_index, content, embedding)
     end
 
-    Worker->>DB: UPDATE status=READY
-    Client->>API: GET /documents/:id (polling)
-    API-->>Client: status=READY
+    Worker->>DB: UPDATE Document SET status = 'READY'
+    Client->>API: GET /documents/:id
+    API-->>Client: 200 OK { id, status: READY }
 ```
 
 ---
 
 ## API Reference
 
-Interactive Swagger documentation is available at
-`http://localhost:3000/api/docs`.
+Interactive Swagger documentation is available at `/api/docs` when the server is running.
 
-| Method | Endpoint | Description |
+### Endpoints
+
+| Method | Route | Description |
 |:---|:---|:---|
-| `POST` | `/documents` | Submit a document (title + raw text) for ingestion. Returns immediately with `PENDING` status. |
-| `GET` | `/documents` | List all submitted documents, newest first. |
-| `GET` | `/documents/:id` | Fetch a single document's current status and metadata. Poll this until `status: "ready"`. |
+| `POST` | `/documents` | Ingest a new document (queues async ingestion) |
+| `GET` | `/documents` | List all documents ordered by creation date |
+| `GET` | `/documents/:id` | Get document metadata and ingestion status |
 
-**Example request:**
+### Ingest Document
 
-```bash
-curl -X POST http://localhost:3000/documents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Hwala Core README",
-    "content": "<paste document text here>"
-  }'
+**Request**
+```http
+POST /documents HTTP/1.1
+Content-Type: application/json
+
+{
+  "title": "Architecture Overview",
+  "content": "DocMind is an asynchronous RAG backend built on NestJS and PostgreSQL..."
+}
 ```
 
-**Example response:**
-
+**Response (`201 Created`)**
 ```json
 {
-  "id": "a3f1c9e2-...",
-  "status": "pending",
-  "message": "Document queued for ingestion"
+  "message": "Document queued for ingestion",
+  "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+  "status": "PENDING"
+}
+```
+
+### Get Document Status
+
+**Request**
+```http
+GET /documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b HTTP/1.1
+```
+
+**Response (`200 OK`)**
+```json
+{
+  "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+  "title": "Architecture Overview",
+  "status": "READY",
+  "failureReason": null,
+  "createdAt": "2026-09-02T10:00:00.000Z"
 }
 ```
 
 ---
 
-## Environment Variables
+## Environment Configuration
 
-| Variable | Default | Required | Description |
+Configure the application by creating a `.env` file in the root directory:
+
+| Variable | Type | Default | Description |
 |:---|:---|:---|:---|
-| `DATABASE_URL` | `postgresql://docmind:docmind@localhost:5432/docmind` | Yes | PostgreSQL connection string |
-| `REDIS_HOST` | `localhost` | Yes | Redis server hostname |
-| `REDIS_PORT` | `6379` | Yes | Redis server port |
-| `OPENAI_API_KEY` | — | Yes | API key for embeddings and generation |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | No | OpenAI embedding model |
-| `EMBEDDING_DIMENSIONS` | `1536` | No | Must match the model's output dimension and the `vector(N)` column size |
-| `CHAT_MODEL` | `gpt-4o-mini` | No | Model used for answer generation (Phase 3) |
-| `CHUNK_SIZE_CHARS` | `1200` | No | Target chunk size in characters |
-| `CHUNK_OVERLAP_CHARS` | `200` | No | Overlap between consecutive chunks |
-| `PORT` | `3000` | No | HTTP application listening port |
+| `PORT` | number | `3000` | HTTP server port |
+| `DATABASE_URL` | string | `postgresql://docmind:docmind@localhost:5432/docmind` | PostgreSQL connection URL |
+| `REDIS_HOST` | string | `localhost` | Redis server hostname |
+| `REDIS_PORT` | number | `6379` | Redis server port |
+| `OPENAI_API_KEY` | string | — | OpenAI API key (required for embeddings) |
+| `EMBEDDING_MODEL` | string | `text-embedding-3-small` | OpenAI embedding model name |
+| `EMBEDDING_DIMENSIONS` | number | `1536` | Embedding vector dimensionality |
+| `CHUNK_SIZE_CHARS` | number | `1200` | Target size per text chunk in characters |
+| `CHUNK_OVERLAP_CHARS` | number | `200` | Character overlap between consecutive chunks |
 
 ---
 
-## Local Development and Setup
+## Getting Started
 
 ### Prerequisites
 
-- Node.js v20 or later
+- Node.js 20+
 - Docker and Docker Compose
-- An OpenAI API key
+- OpenAI API Key
 
-### Installation
+### 1. Clone & Install Dependencies
 
 ```bash
-# Install dependencies
+git clone https://github.com/mo74x/Docmind.git
+cd Docmind
 npm install
-
-# Copy environment variables and add your OpenAI key
-cp .env.example .env
-
-# Start PostgreSQL (pgvector image) and Redis
-docker-compose up -d
-
-# Start the app — migrations (including the pgvector extension
-# and vector column) run automatically on boot
-npm run start:dev
 ```
 
-The API is now available at `http://localhost:3000`, with Swagger docs
-at `http://localhost:3000/api/docs`.
-
-### Verifying ingestion end-to-end
+### 2. Configure Environment
 
 ```bash
-# Submit a document
-curl -X POST http://localhost:3000/documents \
-  -H "Content-Type: application/json" \
-  -d '{"title": "Test doc", "content": "Some text to ingest and embed."}'
-
-# Poll until status is "ready"
-curl http://localhost:3000/documents/<id>
+cp .env.example .env
 ```
+
+Set your `OPENAI_API_KEY` in `.env`.
+
+### 3. Start Infrastructure
+
+Start PostgreSQL with `pgvector` and Redis via Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+### 4. Run Application
+
+```bash
+# Development mode
+npm run start:dev
+
+# Production build
+npm run build
+npm run start:prod
+```
+
+API server will be running at `http://localhost:3000`.  
+Swagger documentation is accessible at `http://localhost:3000/api/docs`.
 
 ---
 
 ## Project Structure
 
-```
+```text
 docmind/
-├── docker-compose.yml           # Local Postgres (pgvector) + Redis
-├── .env.example
+├── docker-compose.yml           # Postgres (pgvector) and Redis services
+├── .env.example                 # Environment variables template
 ├── package.json
 ├── tsconfig.json
-├── nest-cli.json
-├── README.md
 ├── src/
-│   ├── main.ts                  # Application bootstrap, Swagger setup
-│   ├── app.module.ts            # Root module, TypeORM + BullMQ config
+│   ├── main.ts                  # Application bootstrap and Swagger configuration
+│   ├── app.module.ts            # Root module (TypeORM, BullMQ, Config)
 │   ├── config/
-│   │   └── configuration.ts     # Centralized env-driven config
+│   │   └── configuration.ts     # Configuration schema and defaults
 │   ├── migrations/
-│   │   └── 1700000000000-AddPgvector.ts   # Enables pgvector, adds vector column + ivfflat index
+│   │   └── run-pgvector.ts      # pgvector extension and column initialization
 │   ├── documents/
-│   │   ├── document.entity.ts   # Document entity + status enum
-│   │   ├── chunk.entity.ts      # Chunk entity (vector column)
+│   │   ├── document.entity.ts   # Document model and status enum
+│   │   ├── chunk.entity.ts      # Chunk model with vector column
+│   │   ├── documents.controller.ts # Document HTTP endpoints
+│   │   ├── documents.service.ts    # Document business logic and queue dispatcher
 │   │   ├── documents.module.ts
-│   │   ├── documents.service.ts # Submit/query documents, enqueue ingestion
-│   │   ├── documents.controller.ts
 │   │   └── dto/
 │   │       └── ingest-document.dto.ts
 │   ├── ingestion/
-│   │   ├── ingestion.module.ts
-│   │   ├── ingestion.processor.ts  # BullMQ worker: chunk -> embed -> store
-│   │   └── chunking.util.ts        # Boundary-aware text chunking
+│   │   ├── ingestion.processor.ts  # BullMQ worker: chunking -> batch embedding -> insert
+│   │   ├── chunking.util.ts        # Boundary-aware text chunking utility
+│   │   └── ingestion.module.ts
 │   └── embeddings/
-│       ├── embeddings.module.ts
-│       └── embeddings.service.ts   # Batched OpenAI embedding calls
+│       ├── embeddings.service.ts   # OpenAI batch embeddings wrapper
+│       └── embeddings.module.ts
 ```
