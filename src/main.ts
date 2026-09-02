@@ -3,9 +3,30 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
+import { WinstonModule } from 'nest-winston';
+import * as winston from 'winston';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: WinstonModule.createLogger({
+      level: 'debug',
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.ms(),
+        winston.format.json(),
+      ),
+      defaultMeta: { service: 'docmind-api' },
+      transports: [
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.timestamp(),
+            winston.format.ms(),
+            winston.format.simple(),
+          ),
+        }),
+      ],
+    }),
+  });
   const configService = app.get(ConfigService);
 
   // Enable automatic DTO validation

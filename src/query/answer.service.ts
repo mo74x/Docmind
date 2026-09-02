@@ -5,6 +5,8 @@ import Redis from 'ioredis';
 import * as crypto from 'crypto';
 import { QueryService } from './query.service';
 import { SearchQueryDto } from './dto/search-query.dto';
+import { InjectMetric } from '@willsoto/nestjs-prometheus';
+import { Histogram, Counter } from 'prom-client';
 
 export interface AnswerSource {
   citation: string;
@@ -31,6 +33,14 @@ export class AnswerService {
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
     private configService: ConfigService,
     private queryService: QueryService,
+    @InjectMetric('rag_queries_total')
+    private readonly queriesCounter: Counter<string>,
+    @InjectMetric('rag_cache_hits_total')
+    private readonly cacheHitsCounter: Counter<string>,
+    @InjectMetric('llm_generation_duration_seconds')
+    private readonly generationTimer: Histogram<string>,
+    @InjectMetric('vector_search_latency_seconds')
+    private readonly vectorSearchTimer: Histogram<string>,
   ) {
     this.openai = new OpenAI({
       apiKey: this.configService.get<string>('openai.apiKey'),
@@ -40,13 +50,13 @@ export class AnswerService {
   }
 
   async askQuestion(dto: SearchQueryDto): Promise<AnswerResponse> {
+    this.queriesCounter.inc();
     const cacheKey = this.generateCacheKey(dto.query);
-
-    // Check Redis for a cached answer
     const cachedResponse = await this.redis.get(cacheKey);
+
     if (cachedResponse) {
       this.logger.log(`Cache HIT for query: "${dto.query}"`);
-      // Parse the JSON string back into an object
+      this.cacheHitsCounter.inc();
       return JSON.parse(cachedResponse) as AnswerResponse;
     }
 
@@ -54,8 +64,8 @@ export class AnswerService {
       `Cache MISS for query: "${dto.query}". Running pipeline...`,
     );
 
-    // Run the standard RAG pipeline (Retrieval + OpenAI)
     const searchResults = await this.queryService.search(dto);
+    const endTimer = this.generationTimer.startTimer();
 
     if (!searchResults.length) {
       return {
@@ -83,6 +93,7 @@ export class AnswerService {
       ],
       temperature: 0.1,
     });
+    endTimer();
 
     const finalResult = {
       query: dto.query,

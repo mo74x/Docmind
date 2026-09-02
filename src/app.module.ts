@@ -16,13 +16,19 @@ import { RedisModule } from './redis/redis.module';
 import { ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import Redis from 'ioredis';
-
+import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 @Module({
   imports: [
     // Load Environment Variables
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
+    }),
+    PrometheusModule.register({
+      path: '/metrics',
+      defaultMetrics: {
+        enabled: true,
+      },
     }),
     RedisModule,
     // Configure PostgreSQL
