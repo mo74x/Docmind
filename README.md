@@ -1,4 +1,4 @@
-<![CDATA[# DocMind
+# DocMind
 
 > **Intelligent Document Ingestion & Retrieval-Augmented Generation (RAG) Backend**
 
@@ -654,4 +654,3 @@ docmind/
 │   └── redis/
 │       └── redis.module.ts         # Global Redis client provider
 ```
-]]>
