@@ -1,6 +1,16 @@
-# DocMind
+<![CDATA[# DocMind
 
-Document Ingestion and Retrieval-Augmented Generation (RAG) Backend built with NestJS, PostgreSQL (`pgvector`), Redis (`BullMQ` & Caching), and OpenAI.
+> **Intelligent Document Ingestion & Retrieval-Augmented Generation (RAG) Backend**
+
+Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Caching), **OpenAI**, **Prometheus**, and **Winston**.
+
+[![NestJS](https://img.shields.io/badge/NestJS-v11-ea2845?logo=nestjs&logoColor=white)](https://nestjs.com)
+[![TypeScript](https://img.shields.io/badge/TypeScript-v5.7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20+%20pgvector-4169e1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Redis](https://img.shields.io/badge/Redis-7-dc382d?logo=redis&logoColor=white)](https://redis.io)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)](https://openai.com)
+[![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
+[![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
 
@@ -15,10 +25,14 @@ Document Ingestion and Retrieval-Augmented Generation (RAG) Backend built with N
   - [2. Semantic Search & RAG Q&A Pipeline](#2-semantic-search--rag-qa-pipeline)
   - [3. Intelligent Redis Caching](#3-intelligent-redis-caching)
   - [4. Rate Limiting & Protection](#4-rate-limiting--protection)
+- [Observability & Monitoring](#observability--monitoring)
+  - [Structured Logging (Winston)](#structured-logging-winston)
+  - [Prometheus Metrics](#prometheus-metrics)
 - [Database Schema & Indexing](#database-schema--indexing)
 - [API Reference](#api-reference)
   - [Documents Endpoints](#documents-endpoints)
   - [Query & Retrieval Endpoints](#query--retrieval-endpoints)
+  - [Observability Endpoints](#observability-endpoints)
 - [Environment Configuration](#environment-configuration)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
@@ -27,19 +41,24 @@ Document Ingestion and Retrieval-Augmented Generation (RAG) Backend built with N
 
 ## Overview
 
-DocMind is a high-performance backend platform for managing knowledge-base documents and executing low-latency Retrieval-Augmented Generation (RAG). It decouples CPU- and network-heavy document processing (chunking, OpenAI embeddings generation, vector indexing) from HTTP request lifecycles using asynchronous queues, and serves semantic search and grounded AI question answering with multi-tier Redis caching and distributed rate limiting.
+DocMind is a high-performance backend platform for managing knowledge-base documents and executing low-latency **Retrieval-Augmented Generation (RAG)**. It decouples CPU- and network-heavy document processing (chunking, OpenAI embeddings generation, vector indexing) from HTTP request lifecycles using asynchronous queues, and serves semantic search and grounded AI question answering with multi-tier Redis caching and distributed rate limiting.
+
+The platform exposes **Prometheus-compatible metrics** for production monitoring and uses **Winston structured logging** for full operational visibility.
 
 ---
 
 ## Key Features
 
-- **Asynchronous Document Ingestion**: Ingest large texts without blocking HTTP clients. Track lifecycle states (`PENDING` -> `CHUNKING` -> `EMBEDDING` -> `READY` / `FAILED`) in real-time.
-- **Context-Preserving Chunking**: Boundary-aware splitting prioritizes paragraphs and sentence structures with sliding window overlaps to prevent semantic cutoff.
-- **Native Vector Database**: Utilizes PostgreSQL with `pgvector` and an `ivfflat` cosine similarity index for fast, relational-integrated vector search without external vector DB overhead.
-- **Grounded RAG Question Answering**: Synthesizes verified answers strictly from top-k matching source chunks using OpenAI LLMs (`gpt-4o-mini`), complete with inline source citations (`[Source N]`) and anti-hallucination guardrails.
-- **Redis Response Caching**: Fast SHA-256 normalized query caching to deliver instant sub-millisecond responses on repeated or similarly phrased queries.
-- **Distributed Rate Limiting**: Redis-backed rate limiting via `@nestjs/throttler` to protect expensive LLM and vector search endpoints from abuse.
-- **Interactive Swagger Documentation**: Comprehensive OpenAPI spec auto-served at `/api/docs`.
+| Category | Feature | Description |
+|:---|:---|:---|
+| **Ingestion** | Asynchronous Pipeline | Ingest large texts without blocking HTTP clients. Track lifecycle states (`PENDING` → `CHUNKING` → `EMBEDDING` → `READY` / `FAILED`) in real-time. |
+| **Chunking** | Context-Preserving | Boundary-aware splitting prioritizes word structures with sliding window overlaps to prevent semantic cutoff. |
+| **Vector DB** | Native PostgreSQL | Utilizes PostgreSQL with `pgvector` and an `ivfflat` cosine similarity index for fast vector search without external vector DB overhead. |
+| **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
+| **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
+| **Security** | Distributed Rate Limiting | Redis-backed rate limiting via `@nestjs/throttler` to protect expensive LLM and vector search endpoints from abuse. |
+| **Observability** | Prometheus + Winston | Production-grade metrics (`/metrics`) with custom histograms and counters, plus structured JSON logging with timestamps and execution deltas. |
+| **Docs** | Interactive Swagger | Comprehensive OpenAPI spec auto-served at `/api/docs`. |
 
 ---
 
@@ -68,6 +87,11 @@ graph TB
         QUERY_SVC[Query Service]
         ANSWER_SVC[Answer Service]
         NORMALIZER[Query Normalizer & Hasher]
+    end
+
+    subgraph "Observability"
+        WINSTON[Winston Structured Logger]
+        PROM[Prometheus /metrics Endpoint]
     end
 
     subgraph "External Providers"
@@ -105,6 +129,11 @@ graph TB
     QUERY_SVC -->|vector similarity search| PG
     ANSWER_SVC -->|generate grounded answer| OPENAI_CHAT
     ANSWER_SVC -->|set cache EX 86400s| REDIS
+
+    %% Observability
+    ANSWER_SVC -->|record metrics| PROM
+    GATEWAY -->|structured logs| WINSTON
+    CLIENT -->|GET /metrics| PROM
 ```
 
 ---
@@ -123,6 +152,8 @@ graph TB
 | **Caching** | Redis 7 + `ioredis` | Normalized query hash caching (24h TTL) |
 | **Rate Limiting** | `@nestjs/throttler` | Distributed Redis-backed throttling storage |
 | **AI / LLM** | OpenAI API | `text-embedding-3-small` (1536 dim) & `gpt-4o-mini` |
+| **Metrics** | Prometheus + `prom-client` | Custom counters, histograms, and default Node.js runtime metrics via `@willsoto/nestjs-prometheus` |
+| **Logging** | Winston + `nest-winston` | Structured JSON logging with timestamps, execution deltas (`ms`), and service metadata |
 | **Validation** | `class-validator` / `class-transformer` | Runtime schema validation & DTO transformation |
 | **Documentation** | Swagger / OpenAPI | Auto-generated interactive API documentation |
 
@@ -182,6 +213,7 @@ sequenceDiagram
     participant Client
     participant Controller as Query Controller
     participant AnswerSvc as Answer Service
+    participant Prometheus as Prometheus Metrics
     participant Redis as Redis Cache
     participant QuerySvc as Query Service
     participant OpenAI as OpenAI (Embeddings & Chat)
@@ -189,11 +221,13 @@ sequenceDiagram
 
     Client->>Controller: POST /query/ask { query: "What is DocMind?" }
     Controller->>AnswerSvc: askQuestion(dto)
+    AnswerSvc->>Prometheus: queriesCounter.inc()
     AnswerSvc->>AnswerSvc: Normalize & SHA-256 Hash query
     AnswerSvc->>Redis: GET docmind:cache:ask:<hash>
     
     alt Cache HIT
         Redis-->>AnswerSvc: Cached Answer JSON
+        AnswerSvc->>Prometheus: cacheHitsCounter.inc()
         AnswerSvc-->>Controller: AnswerResponse { answer, sources, isCached: true }
         Controller-->>Client: 200 OK Response
     else Cache MISS
@@ -205,8 +239,10 @@ sequenceDiagram
         DB-->>QuerySvc: SearchResult[]
         QuerySvc-->>AnswerSvc: Top matching chunks
         
+        AnswerSvc->>Prometheus: generationTimer.startTimer()
         AnswerSvc->>OpenAI: POST /v1/chat/completions (Grounding Prompt + Context)
         OpenAI-->>AnswerSvc: Generated Answer with [Source N] citations
+        AnswerSvc->>Prometheus: generationTimer.end()
         AnswerSvc->>Redis: SET docmind:cache:ask:<hash> (EX 86400s)
         AnswerSvc-->>Controller: AnswerResponse { answer, sources, isCached: false }
         Controller-->>Client: 200 OK Response
@@ -223,6 +259,70 @@ DocMind uses `@nestjs/throttler` backed by Redis storage to enforce rate limits 
 - **Global / Default**: 10 requests / minute
 - **`/query/search`**: 20 requests / minute
 - **`/query/ask`**: 5 requests / minute
+
+---
+
+## Observability & Monitoring
+
+DocMind ships with production-grade observability built-in, requiring **zero external configuration** to start collecting metrics and structured logs.
+
+### Structured Logging (Winston)
+
+The application uses **Winston** via `nest-winston` as the global NestJS logger, replacing the default console logger with structured, machine-parseable output:
+
+| Feature | Details |
+|:---|:---|
+| **Format** | JSON with `timestamp` and `ms` (execution delta) fields |
+| **Service Metadata** | Every log line includes `{ service: "docmind-api" }` |
+| **Console Transport** | Human-readable `simple()` format for development |
+| **Log Level** | `debug` (captures all severity levels) |
+
+**Example Log Output:**
+```json
+{
+  "level": "info",
+  "message": "Cache MISS for query: \"What is RAG?\". Running pipeline...",
+  "service": "docmind-api",
+  "timestamp": "2026-09-02T12:00:00.000Z",
+  "ms": "+215ms"
+}
+```
+
+### Prometheus Metrics
+
+A Prometheus-compatible metrics endpoint is exposed at **`GET /metrics`** via `@willsoto/nestjs-prometheus`. Default Node.js runtime metrics (event loop lag, heap usage, GC, etc.) are enabled automatically.
+
+#### Custom Application Metrics
+
+| Metric Name | Type | Description | Labels / Buckets |
+|:---|:---|:---|:---|
+| `rag_queries_total` | Counter | Total RAG queries received via `/query/ask` | — |
+| `rag_cache_hits_total` | Counter | Queries served directly from Redis cache | — |
+| `llm_generation_duration_seconds` | Histogram | Time spent waiting for OpenAI Chat API response | `0.5, 1, 2, 5, 10` seconds |
+| `vector_search_latency_seconds` | Histogram | Latency of pgvector cosine similarity search | `0.001, 0.005, 0.01, 0.05, 0.1` seconds |
+
+#### Monitoring Architecture
+
+```mermaid
+graph LR
+    APP["DocMind API<br/>(NestJS)"] -->|GET /metrics| PROM["Prometheus<br/>Scraper"]
+    PROM --> GRAFANA["Grafana<br/>Dashboard"]
+    APP -->|stdout / stderr| WINSTON["Winston<br/>JSON Logs"]
+    WINSTON --> LOG_AGG["Log Aggregator<br/>(ELK / Loki / CloudWatch)"]
+```
+
+#### Example Prometheus Queries
+
+```promql
+# Cache hit rate (last 5 minutes)
+rate(rag_cache_hits_total[5m]) / rate(rag_queries_total[5m])
+
+# 95th percentile LLM generation latency
+histogram_quantile(0.95, rate(llm_generation_duration_seconds_bucket[5m]))
+
+# Average vector search latency
+rate(vector_search_latency_seconds_sum[5m]) / rate(vector_search_latency_seconds_count[5m])
+```
 
 ---
 
@@ -385,6 +485,48 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 
 ---
 
+### Observability Endpoints
+
+#### 6. Prometheus Metrics
+`GET /metrics`
+
+Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
+
+**Response (`200 OK`, `text/plain`)**
+```text
+# HELP rag_queries_total Total number of RAG queries received
+# TYPE rag_queries_total counter
+rag_queries_total 42
+
+# HELP rag_cache_hits_total Total number of RAG queries served from Redis cache
+# TYPE rag_cache_hits_total counter
+rag_cache_hits_total 28
+
+# HELP llm_generation_duration_seconds Time spent waiting for the OpenAI Chat API
+# TYPE llm_generation_duration_seconds histogram
+llm_generation_duration_seconds_bucket{le="0.5"} 2
+llm_generation_duration_seconds_bucket{le="1"} 8
+llm_generation_duration_seconds_bucket{le="2"} 12
+llm_generation_duration_seconds_bucket{le="5"} 14
+llm_generation_duration_seconds_bucket{le="10"} 14
+llm_generation_duration_seconds_bucket{le="+Inf"} 14
+llm_generation_duration_seconds_sum 21.54
+llm_generation_duration_seconds_count 14
+
+# HELP vector_search_latency_seconds Latency of vector similarity search in PostgreSQL
+# TYPE vector_search_latency_seconds histogram
+vector_search_latency_seconds_bucket{le="0.001"} 5
+vector_search_latency_seconds_bucket{le="0.005"} 18
+vector_search_latency_seconds_bucket{le="0.01"} 25
+vector_search_latency_seconds_bucket{le="0.05"} 40
+vector_search_latency_seconds_bucket{le="0.1"} 42
+vector_search_latency_seconds_bucket{le="+Inf"} 42
+vector_search_latency_seconds_sum 0.386
+vector_search_latency_seconds_count 42
+```
+
+---
+
 ## Environment Configuration
 
 Configure application settings via environment variables (or `.env` file):
@@ -462,8 +604,13 @@ npm run build
 npm run start:prod
 ```
 
-- API Server: `http://localhost:3000`
-- Interactive Swagger UI: `http://localhost:3000/api/docs`
+### Available Endpoints
+
+| Endpoint | Description |
+|:---|:---|
+| `http://localhost:3000` | API Server |
+| `http://localhost:3000/api/docs` | Interactive Swagger UI |
+| `http://localhost:3000/metrics` | Prometheus Metrics |
 
 ---
 
@@ -476,8 +623,8 @@ docmind/
 ├── package.json
 ├── tsconfig.json
 ├── src/
-│   ├── main.ts                     # Bootstrap, Swagger, & Global Validation
-│   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler)
+│   ├── main.ts                     # Bootstrap, Swagger, Winston Logger & Global Validation
+│   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus)
 │   ├── config/
 │   │   └── configuration.ts        # Config loader & environment parsing
 │   ├── migrations/
@@ -500,10 +647,11 @@ docmind/
 │   ├── query/
 │   │   ├── query.controller.ts     # Semantic search & Q&A endpoints with rate limits
 │   │   ├── query.service.ts        # Vector similarity search over pgvector
-│   │   ├── answer.service.ts       # RAG answer synthesis & Redis response caching
-│   │   ├── query.module.ts
+│   │   ├── answer.service.ts       # RAG answer synthesis, Redis caching & Prometheus instrumentation
+│   │   ├── query.module.ts         # Prometheus metric providers (counters & histograms)
 │   │   └── dto/
 │   │       └── search-query.dto.ts # Query validation DTO
 │   └── redis/
 │       └── redis.module.ts         # Global Redis client provider
 ```
+]]>
