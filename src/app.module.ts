@@ -8,6 +8,7 @@ import { Chunk } from './documents/chunk.entity';
 import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { DocumentsModule } from './documents/documents.module';
+import { QueryModule } from './query/query.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { DocumentsModule } from './documents/documents.module';
     EmbeddingsModule,
     IngestionModule,
     DocumentsModule,
+    QueryModule,
   ],
 })
 export class AppModule {}
