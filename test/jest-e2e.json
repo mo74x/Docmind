@@ -5,5 +5,11 @@
   "testRegex": ".e2e-spec.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "moduleNameMapper": {
+    "^@nestjs/config$": "<rootDir>/../src/__mocks__/nestjs-config.ts",
+    "^@nestjs/typeorm$": "<rootDir>/../src/__mocks__/nestjs-typeorm.ts",
+    "^@nestjs/bullmq$": "<rootDir>/../src/__mocks__/nestjs-bullmq.ts",
+    "^ioredis$": "<rootDir>/../src/__mocks__/ioredis.ts"
   }
 }

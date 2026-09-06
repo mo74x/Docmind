@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { Inject } from '@nestjs/common';
 
@@ -19,6 +22,11 @@ export function Processor(_queueNameOrOptions?: any): ClassDecorator {
   return (_target: any) => {};
 }
 
+const mockQueue = {
+  add: () => Promise.resolve({ id: 'mock-job-id' }),
+  process: () => Promise.resolve(),
+};
+
 export class BullModule {
   static forRoot(_options?: any) {
     return {
@@ -29,11 +37,27 @@ export class BullModule {
     };
   }
 
-  static registerQueue(..._queues: any[]) {
+  static forRootAsync(_options?: any) {
     return {
       module: BullModule,
+      global: true,
       providers: [],
       exports: [],
+    };
+  }
+
+  static registerQueue(...queues: any[]) {
+    const providers = queues.map((q) => {
+      const name = typeof q === 'string' ? q : q.name;
+      return {
+        provide: getQueueToken(name),
+        useValue: mockQueue,
+      };
+    });
+    return {
+      module: BullModule,
+      providers,
+      exports: providers.map((p) => p.provide),
     };
   }
 }
