@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Test, TestingModule } from '@nestjs/testing';
@@ -114,25 +115,109 @@ describe('DocumentsController (e2e)', () => {
   });
 
   describe('GET /documents', () => {
-    it('should return 200 OK with document list', async () => {
-      const documentsList = [
-        mockDocument,
-        {
-          ...mockDocument,
-          id: 'b28795c6-455b-4c4c-a3f2-c38d38706fa2',
-          title: 'Second Document',
-          status: DocumentStatus.READY,
-        },
-      ];
-      documentsServiceMock.findAll.mockResolvedValue(documentsList);
+    const paginatedResponse = {
+      data: [mockDocument],
+      meta: {
+        page: 1,
+        limit: 10,
+        totalItems: 1,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      },
+    };
+
+    it('should return 200 OK with paginated document response on default query', async () => {
+      documentsServiceMock.findAll.mockResolvedValue(paginatedResponse);
 
       const response = await request(app.getHttpServer())
         .get('/documents')
         .expect(200);
 
-      expect(response.body).toHaveLength(2);
-      expect(response.body[0].id).toBe(mockDocument.id);
-      expect(documentsServiceMock.findAll).toHaveBeenCalledTimes(1);
+      expect(response.body).toEqual({
+        data: expect.any(Array),
+        meta: {
+          page: 1,
+          limit: 10,
+          totalItems: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+      });
+      expect(response.body.data[0].id).toBe(mockDocument.id);
+      expect(documentsServiceMock.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          page: 1,
+          limit: 10,
+          order: 'DESC',
+        }),
+      );
+    });
+
+    it('should pass validated query parameters (page, limit, order) to service', async () => {
+      const customResponse = {
+        data: [mockDocument],
+        meta: {
+          page: 2,
+          limit: 5,
+          totalItems: 15,
+          totalPages: 3,
+          hasNextPage: true,
+          hasPreviousPage: true,
+        },
+      };
+      documentsServiceMock.findAll.mockResolvedValue(customResponse);
+
+      const response = await request(app.getHttpServer())
+        .get('/documents?page=2&limit=5&order=ASC')
+        .expect(200);
+
+      expect(response.body.meta.page).toBe(2);
+      expect(response.body.meta.limit).toBe(5);
+      expect(documentsServiceMock.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          page: 2,
+          limit: 5,
+          order: 'ASC',
+        }),
+      );
+    });
+
+    it('should return 400 Bad Request when limit exceeds maximum of 100', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/documents?limit=250')
+        .expect(400);
+
+      expect(response.body.statusCode).toBe(400);
+      expect(response.body.message).toEqual(
+        expect.arrayContaining([expect.stringContaining('limit')]),
+      );
+      expect(documentsServiceMock.findAll).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 Bad Request when page is less than 1', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/documents?page=0')
+        .expect(400);
+
+      expect(response.body.statusCode).toBe(400);
+      expect(response.body.message).toEqual(
+        expect.arrayContaining([expect.stringContaining('page')]),
+      );
+      expect(documentsServiceMock.findAll).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 Bad Request when order is invalid', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/documents?order=INVALID')
+        .expect(400);
+
+      expect(response.body.statusCode).toBe(400);
+      expect(response.body.message).toEqual(
+        expect.arrayContaining([expect.stringContaining('order')]),
+      );
+      expect(documentsServiceMock.findAll).not.toHaveBeenCalled();
     });
   });
 

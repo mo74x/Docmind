@@ -6,6 +6,8 @@ import { Queue } from 'bullmq';
 import { Document } from './document.entity';
 import { Chunk } from './chunk.entity';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
+import { PaginationDto } from '../common/dto/pagination.dto';
+import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 
 @Injectable()
 export class DocumentsService {
@@ -34,9 +36,18 @@ export class DocumentsService {
     return savedDocument;
   }
 
-  async findAll(): Promise<Document[]> {
-    return this.documentRepo.find({
-      order: { createdAt: 'DESC' },
+  async findAll(
+    dto: PaginationDto = new PaginationDto(),
+  ): Promise<PaginatedResponseDto<Document>> {
+    const page = dto.page || 1;
+    const limit = dto.limit || 10;
+    const order = dto.order || 'DESC';
+    const skip = (page - 1) * limit;
+
+    const [data, totalItems] = await this.documentRepo.findAndCount({
+      skip,
+      take: limit,
+      order: { createdAt: order },
       select: {
         id: true,
         title: true,
@@ -45,6 +56,8 @@ export class DocumentsService {
         failureReason: true,
       },
     });
+
+    return new PaginatedResponseDto(data, totalItems, page, limit);
   }
 
   async findOne(id: string): Promise<Document> {

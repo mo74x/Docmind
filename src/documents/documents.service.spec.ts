@@ -14,6 +14,7 @@ describe('DocumentsService', () => {
     create: jest.Mock;
     save: jest.Mock;
     find: jest.Mock;
+    findAndCount: jest.Mock;
     findOneBy: jest.Mock;
     delete: jest.Mock;
   };
@@ -29,6 +30,7 @@ describe('DocumentsService', () => {
       create: jest.fn(),
       save: jest.fn(),
       find: jest.fn(),
+      findAndCount: jest.fn(),
       findOneBy: jest.fn(),
       delete: jest.fn(),
     };
@@ -107,29 +109,31 @@ describe('DocumentsService', () => {
   });
 
   describe('findAll', () => {
-    it('should return documents ordered by createdAt DESC with proper field selection', async () => {
-      const mockDocuments = [
-        {
-          id: 'doc-1',
-          title: 'Document One',
-          status: DocumentStatus.READY,
-          createdAt: new Date('2026-09-06T08:00:00Z'),
-          failureReason: null,
-        },
-        {
-          id: 'doc-2',
-          title: 'Document Two',
-          status: DocumentStatus.PENDING,
-          createdAt: new Date('2026-09-06T07:00:00Z'),
-          failureReason: null,
-        },
-      ];
+    const mockDocuments = [
+      {
+        id: 'doc-1',
+        title: 'Document One',
+        status: DocumentStatus.READY,
+        createdAt: new Date('2026-09-06T08:00:00Z'),
+        failureReason: null,
+      },
+      {
+        id: 'doc-2',
+        title: 'Document Two',
+        status: DocumentStatus.PENDING,
+        createdAt: new Date('2026-09-06T07:00:00Z'),
+        failureReason: null,
+      },
+    ];
 
-      documentRepoMock.find.mockResolvedValue(mockDocuments);
+    it('should return paginated documents with default parameters (page 1, limit 10, DESC)', async () => {
+      documentRepoMock.findAndCount.mockResolvedValue([mockDocuments, 2]);
 
-      const results = await service.findAll();
+      const result = await service.findAll();
 
-      expect(documentRepoMock.find).toHaveBeenCalledWith({
+      expect(documentRepoMock.findAndCount).toHaveBeenCalledWith({
+        skip: 0,
+        take: 10,
         order: { createdAt: 'DESC' },
         select: {
           id: true,
@@ -139,7 +143,49 @@ describe('DocumentsService', () => {
           failureReason: true,
         },
       });
-      expect(results).toEqual(mockDocuments);
+
+      expect(result.data).toEqual(mockDocuments);
+      expect(result.meta).toEqual({
+        page: 1,
+        limit: 10,
+        totalItems: 2,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      });
+    });
+
+    it('should apply custom pagination parameters and correctly calculate pagination metadata', async () => {
+      documentRepoMock.findAndCount.mockResolvedValue([mockDocuments, 25]);
+
+      const result = await service.findAll({
+        page: 2,
+        limit: 5,
+        order: 'ASC',
+      });
+
+      expect(documentRepoMock.findAndCount).toHaveBeenCalledWith({
+        skip: 5,
+        take: 5,
+        order: { createdAt: 'ASC' },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          failureReason: true,
+        },
+      });
+
+      expect(result.data).toEqual(mockDocuments);
+      expect(result.meta).toEqual({
+        page: 2,
+        limit: 5,
+        totalItems: 25,
+        totalPages: 5,
+        hasNextPage: true,
+        hasPreviousPage: true,
+      });
     });
   });
 

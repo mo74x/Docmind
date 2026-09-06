@@ -25,6 +25,7 @@ const mockDataSource = {
   query: () => Promise.resolve([]),
   getRepository: () => ({
     find: () => Promise.resolve([]),
+    findAndCount: () => Promise.resolve([[], 0]),
     findOneBy: () => Promise.resolve(null),
     save: (e: any) => Promise.resolve({ id: 'mock-uuid', ...e }),
     create: (e: any) => e,
@@ -66,6 +67,7 @@ export class TypeOrmModule {
       provide: getRepositoryToken(entity),
       useValue: {
         find: () => Promise.resolve([]),
+        findAndCount: () => Promise.resolve([[], 0]),
         findOneBy: () => Promise.resolve(null),
         save: (e: any) => Promise.resolve({ id: 'mock-uuid', ...e }),
         create: (e: any) => e,

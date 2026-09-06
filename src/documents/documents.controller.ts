@@ -1,7 +1,17 @@
-import { Controller, Post, Body, Get, Param, Delete } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Param,
+  Delete,
+  Query,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
+import { PaginationDto } from '../common/dto/pagination.dto';
+import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 
 @ApiTags('Documents')
 @Controller('documents')
@@ -21,9 +31,22 @@ export class DocumentsController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List all documents and their current statuses' })
-  async findAll() {
-    return this.documentsService.findAll();
+  @ApiOperation({ summary: 'List all documents with pagination' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'order',
+    required: false,
+    enum: ['ASC', 'DESC'],
+    example: 'DESC',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of documents',
+    type: PaginatedResponseDto,
+  })
+  async findAll(@Query() paginationDto: PaginationDto) {
+    return this.documentsService.findAll(paginationDto);
   }
 
   @Get(':id')
