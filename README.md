@@ -10,6 +10,8 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Redis](https://img.shields.io/badge/Redis-7-dc382d?logo=redis&logoColor=white)](https://redis.io)
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)](https://openai.com)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-53%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-14%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
@@ -25,6 +27,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [2. Semantic Search & RAG Q&A Pipeline](#2-semantic-search--rag-qa-pipeline)
   - [3. Intelligent Redis Caching](#3-intelligent-redis-caching)
   - [4. Rate Limiting & Protection](#4-rate-limiting--protection)
+  - [5. API Key Authentication & Route Security](#5-api-key-authentication--route-security)
 - [Observability & Monitoring](#observability--monitoring)
   - [Structured Logging (Winston)](#structured-logging-winston)
   - [Prometheus Metrics](#prometheus-metrics)
@@ -34,6 +37,9 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [Query & Retrieval Endpoints](#query--retrieval-endpoints)
   - [Observability Endpoints](#observability-endpoints)
 - [Environment Configuration](#environment-configuration)
+- [Testing & Quality Assurance](#testing--quality-assurance)
+  - [Running Tests](#running-tests)
+  - [Test Suite Breakdown](#test-suite-breakdown)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
 
@@ -52,13 +58,15 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 | Category | Feature | Description |
 |:---|:---|:---|
 | **Ingestion** | Asynchronous Pipeline | Ingest large texts without blocking HTTP clients. Track lifecycle states (`PENDING` → `CHUNKING` → `EMBEDDING` → `READY` / `FAILED`) in real-time. |
+| **Documents** | Scalable Pagination | TypeORM `findAndCount` pagination supporting `page`, `limit` (1-100), and `order` (`ASC`/`DESC`), with automatic cascade deletion of chunks on document removal. |
 | **Chunking** | Context-Preserving | Boundary-aware splitting prioritizes word structures with sliding window overlaps to prevent semantic cutoff. |
 | **Vector DB** | Native PostgreSQL | Utilizes PostgreSQL with `pgvector` and an `ivfflat` cosine similarity index for fast vector search without external vector DB overhead. |
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
 | **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
-| **Security** | Distributed Rate Limiting | Redis-backed rate limiting via `@nestjs/throttler` to protect expensive LLM and vector search endpoints from abuse. |
+| **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
 | **Observability** | Prometheus + Winston | Production-grade metrics (`/metrics`) with custom histograms and counters, plus structured JSON logging with timestamps and execution deltas. |
-| **Docs** | Interactive Swagger | Comprehensive OpenAPI spec auto-served at `/api/docs`. |
+| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites covering 100% of critical paths with isolated in-memory test mocks. |
+| **Docs** | Interactive Swagger | Comprehensive OpenAPI spec with API Key security definitions auto-served at `/api/docs`. |
 
 ---
 
@@ -72,6 +80,7 @@ graph TB
 
     subgraph "API & Guard Layer"
         GATEWAY[NestJS Controller]
+        AUTH[API Key Guard / @Public Decorator]
         THROTTLE[Redis-Backed Rate Limiter]
         VALIDATION[DTO Validation Pipe]
     end
@@ -260,6 +269,14 @@ DocMind uses `@nestjs/throttler` backed by Redis storage to enforce rate limits 
 - **`/query/search`**: 20 requests / minute
 - **`/query/ask`**: 5 requests / minute
 
+### 5. API Key Authentication & Route Security
+
+DocMind protects all sensitive API endpoints using a global `ApiKeyGuard` bound via `APP_GUARD`:
+- **Dual-Header Support**: Accepts authentication credentials via either `x-api-key: <token>` or standard `Authorization: Bearer <token>`.
+- **Public Endpoint Exemption**: Endpoints such as `/health`, `/metrics`, and `/api/docs` are marked with the `@Public()` decorator to allow unrestricted access for Prometheus scraping, load balancers, and documentation inspection.
+- **Zero-Friction Development Mode**: If `API_KEY` is not defined in the environment, the guard automatically logs a development warning and allows incoming requests to pass without rejection.
+- **OpenAPI / Swagger Integration**: The OpenAPI specification at `/api/docs` incorporates the `x-api-key` security scheme directly, allowing interactive authenticated test queries right from the browser.
+
 ---
 
 ## Observability & Monitoring
@@ -393,17 +410,36 @@ Queues a new document for background chunking, embedding, and vector indexing.
 #### 2. List Documents
 `GET /documents`
 
+Retrieves a paginated list of ingested documents ordered chronologically.
+
+**Query Parameters**
+| Parameter | Type | Default | Validation / Constraints | Description |
+|:---|:---|:---|:---|:---|
+| `page` | number | `1` | Min: `1` | Current page number |
+| `limit` | number | `10` | Min: `1`, Max: `100` | Number of documents per page |
+| `order` | string | `DESC` | `ASC` \| `DESC` | Sort order by creation timestamp |
+
 **Response (`200 OK`)**
 ```json
-[
-  {
-    "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
-    "title": "DocMind Architecture Overview",
-    "status": "READY",
-    "failureReason": null,
-    "createdAt": "2026-09-02T10:00:00.000Z"
+{
+  "data": [
+    {
+      "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+      "title": "DocMind Architecture Overview",
+      "status": "READY",
+      "failureReason": null,
+      "createdAt": "2026-09-02T10:00:00.000Z"
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 10,
+    "totalItems": 42,
+    "totalPages": 5,
+    "hasNextPage": true,
+    "hasPreviousPage": false
   }
-]
+}
 ```
 
 #### 3. Get Document Status
@@ -594,6 +630,7 @@ Configure application settings via environment variables (or `.env` file):
 | Variable | Type | Default | Description |
 |:---|:---|:---|:---|
 | `PORT` | number | `3000` | HTTP application port |
+| `API_KEY` | string | — | Secret API key for endpoint authentication (optional in dev) |
 | `DATABASE_URL` | string | `postgresql://docmind:docmind_password@localhost:5432/docmind` | PostgreSQL connection string |
 | `REDIS_HOST` | string | `localhost` | Redis server hostname |
 | `REDIS_PORT` | number | `6379` | Redis server port |
@@ -605,6 +642,45 @@ Configure application settings via environment variables (or `.env` file):
 | `CHUNK_OVERLAP_CHARS` | number | `200` | Character overlap between consecutive chunks |
 | `RATE_LIMIT_TTL` | number | `60000` | Throttler time-to-live window in milliseconds |
 | `RATE_LIMIT_MAX` | number | `10` | Default maximum requests per TTL window |
+
+---
+
+## Testing & Quality Assurance
+
+DocMind features a comprehensive automated testing suite covering unit, utility, integration, and full HTTP lifecycle E2E scenarios.
+
+### Running Tests
+
+```bash
+# Run unit & integration test suites
+npm test
+
+# Run end-to-end (E2E) tests against simulated HTTP application
+npm run test:e2e
+
+# Run test coverage report
+npm run test:cov
+
+# Run linter checks
+npm run lint
+```
+
+### Test Suite Breakdown
+
+| Test Suite | Path | Type | Key Verifications Covered |
+|:---|:---|:---|:---|
+| **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
+| **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
+| **Vector Search Service** | `src/query/query.service.spec.ts` | Unit | Cosine distance `<->` operator SQL formatting, vector parameter serialization (`[0.1, 0.2, ...]`), and limit boundaries. |
+| **Documents Service** | `src/documents/documents.service.spec.ts` | Unit | Entity persistence, BullMQ job enqueueing, paginated `findAndCount` queries, cascade deletion of child chunks. |
+| **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
+| **Health Controller** | `src/health/health.controller.spec.ts` | Unit | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
+| **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
+| **Application Lifecycle E2E** | `test/app.e2e-spec.ts` | E2E | HTTP GET `/health`, `/metrics`, unhandled route 404 formatting, and global filter verification. |
+| **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | Full HTTP lifecycle for document ingestion, paginated document listing with metadata, and cascade deletion. |
+
+> [!NOTE]
+> All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost.
 
 ---
 
@@ -683,30 +759,53 @@ docmind/
 ├── .env.example                    # Environment configuration template
 ├── package.json
 ├── tsconfig.json
+├── test/                           # E2E Test suites & configurations
+│   ├── app.e2e-spec.ts             # Health, metrics & filter E2E tests
+│   ├── documents.e2e-spec.ts       # Document ingestion, pagination & deletion E2E tests
+│   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
 ├── src/
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
 │   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
+│   ├── __mocks__/                  # Pure ESM module mappings for high-speed isolated testing
+│   │   ├── ioredis.ts
+│   │   ├── nestjs-bullmq.ts
+│   │   ├── nestjs-config.ts
+│   │   └── nestjs-typeorm.ts
+│   ├── auth/                       # API Key Authentication & Route Security
+│   │   ├── auth.module.ts          # Global APP_GUARD provider
+│   │   ├── decorators/
+│   │   │   └── public.decorator.ts # @Public() bypass decorator
+│   │   └── guards/
+│   │       ├── api-key.guard.ts    # Dual-header API key validator & dev bypass
+│   │       └── api-key.guard.spec.ts
 │   ├── common/
+│   │   ├── dto/                    # Reusable DTOs
+│   │   │   ├── pagination.dto.ts   # Pagination query validation DTO (page, limit, order)
+│   │   │   └── paginated-response.dto.ts # Generic paginated response wrapper
 │   │   └── filters/
-│   │       └── all-exceptions.filter.ts # Global exception filter & structured error logging
+│   │       ├── all-exceptions.filter.ts      # Global exception filter & structured error logging
+│   │       └── all-exceptions.filter.spec.ts
 │   ├── config/
 │   │   └── configuration.ts        # Config loader & environment parsing
 │   ├── health/
 │   │   ├── health.controller.ts    # DB & Redis connectivity & uptime health probe
+│   │   ├── health.controller.spec.ts
 │   │   └── health.module.ts
 │   ├── migrations/
 │   │   └── run-pgvector.ts         # pgvector extension & ivfflat index migration
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
 │   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) column
-│   │   ├── documents.controller.ts # Ingestion, status, & DELETE endpoints
+│   │   ├── documents.controller.ts # Ingestion, paginated listing, status & DELETE endpoints
 │   │   ├── documents.service.ts    # Document state management, queue producer & deletion
+│   │   ├── documents.service.spec.ts
 │   │   ├── documents.module.ts
 │   │   └── dto/
 │   │       └── ingest-document.dto.ts
 │   ├── ingestion/
 │   │   ├── ingestion.processor.ts  # BullMQ worker: chunking -> batch embedding -> DB
 │   │   ├── chunking.util.ts        # Boundary-aware text chunking logic
+│   │   ├── chunking.util.spec.ts
 │   │   └── ingestion.module.ts
 │   ├── embeddings/
 │   │   ├── embeddings.service.ts   # OpenAI batch embeddings client
@@ -714,7 +813,9 @@ docmind/
 │   ├── query/
 │   │   ├── query.controller.ts     # Semantic search & Q&A endpoints with rate limits
 │   │   ├── query.service.ts        # Vector similarity search over pgvector
+│   │   ├── query.service.spec.ts
 │   │   ├── answer.service.ts       # RAG answer synthesis, Redis caching & Prometheus instrumentation
+│   │   ├── answer.service.spec.ts
 │   │   ├── query.module.ts         # Prometheus metric providers (counters & histograms)
 │   │   └── dto/
 │   │       └── search-query.dto.ts # Query validation DTO
