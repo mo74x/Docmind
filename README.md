@@ -12,8 +12,8 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
 [![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
 [![CI/CD](https://github.com/mo74x/Docmind/actions/workflows/ci.yml/badge.svg)](https://github.com/mo74x/Docmind/actions/workflows/ci.yml)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-69%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
-[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-18%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-84%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-21%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
@@ -32,6 +32,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [5. Rate Limiting & Protection](#5-rate-limiting--protection)
   - [6. API Key Authentication & Route Security](#6-api-key-authentication--route-security)
   - [7. Production Docker & Container Orchestration](#7-production-docker--container-orchestration)
+  - [8. Real-Time Ingestion Progress Streaming (SSE)](#8-real-time-ingestion-progress-streaming-sse)
 - [Observability & Monitoring](#observability--monitoring)
   - [Structured Logging (Winston)](#structured-logging-winston)
   - [Prometheus Metrics](#prometheus-metrics)
@@ -360,6 +361,55 @@ DocMind includes an enterprise-grade containerization setup designed for minimal
   - Implements container-level healthchecks (`pg_isready`, `redis-cli ping`).
   - Utilizes `depends_on` with `condition: service_healthy` so the NestJS application only boots after database and cache services are fully operational.
 
+### 8. Real-Time Ingestion Progress Streaming (SSE)
+
+Clients can stream real-time status updates without polling by connecting to **`GET /documents/:id/progress`** via **Server-Sent Events (SSE)**:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Controller as Documents Controller
+    participant Service as Documents Service
+    participant EventsSvc as Ingestion Events Service
+    participant Worker as Ingestion Processor
+    participant DB as PostgreSQL
+
+    Client->>Controller: GET /documents/:id/progress (Accept: text/event-stream)
+    Controller->>Service: getProgressStream(id)
+    Service->>EventsSvc: onProgress(id, listener)
+    Service->>DB: findOne(id) (Fetch immediate DB state)
+    Service-->>Client: SSE Initial Status { status: PENDING, percent: 0 }
+
+    Worker->>EventsSvc: emitProgress({ status: CHUNKING, percent: 25 })
+    EventsSvc-->>Service: Trigger registered listener
+    Service-->>Client: SSE Event { step: "CHUNKING", percent: 25 }
+
+    loop Batch Embeddings (50% -> 90%)
+        Worker->>EventsSvc: emitProgress({ status: EMBEDDING, percent: 50..90 })
+        EventsSvc-->>Service: Trigger listener
+        Service-->>Client: SSE Event { step: "EMBEDDING", percent: 50..90 }
+    end
+
+    alt Processing Succeeded
+        Worker->>EventsSvc: emitProgress({ status: READY, percent: 100 })
+        EventsSvc-->>Service: Trigger listener
+        Service-->>Client: SSE Event { step: "READY", percent: 100 }
+        Service->>Client: subscriber.complete() (Close stream)
+    else Processing Failed
+        Worker->>EventsSvc: emitProgress({ status: FAILED, percent: 0, error })
+        EventsSvc-->>Service: Trigger listener
+        Service-->>Client: SSE Event { step: "FAILED", percent: 0, error }
+        Service->>Client: subscriber.complete() (Close stream)
+    end
+    Service->>EventsSvc: offProgress(id, listener) (Teardown & prevent leaks)
+```
+
+- **Race Condition Prevention**: The subscriber registers the live progress listener *before* reading the initial state from PostgreSQL, guaranteeing that rapid background events are never missed.
+- **Immediate Feedback**: The initial event reflects the database status at connection time, so clients connecting mid-pipeline or after completion immediately receive current state.
+- **Distributed Ready**: The `IngestionEventsService` broadcasts in-memory via Node.js `EventEmitter` and optionally publishes to Redis PubSub channels (`docmind:progress:<documentId>`) for multi-replica scalability.
+- **Leak-Free Connection Teardown**: An RxJS teardown hook unregisters the listener (`offProgress`) as soon as the client disconnects or the terminal state (`READY` / `FAILED`) is reached.
+
 ---
 
 ## Observability & Monitoring
@@ -595,11 +645,34 @@ Deletes a document record and purges all associated text chunks and vector embed
 }
 ```
 
+#### 6. Stream Ingestion Progress (SSE)
+`GET /documents/:id/progress`
+
+Establishes a real-time **Server-Sent Events (SSE)** connection streaming progress updates as the document moves through the ingestion queue (`PENDING` → `CHUNKING` 25% → `EMBEDDING` 50%..90% → `READY` 100% or `FAILED`).
+
+- **Headers Sent by Client**: `Accept: text/event-stream`
+- **Response Headers**: `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache`, `Connection: keep-alive`
+- **Initial Event**: Immediately transmits current database state to prevent lost updates or polling.
+- **Stream Termination**: Automatically emits completion and closes the connection when reaching terminal status (`READY` / `FAILED`).
+
+**Event Stream Example (`text/event-stream`)**
+```text
+data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"PENDING","percent":0,"step":"PENDING","message":"Document queued for ingestion"}
+
+data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"CHUNKING","percent":25,"step":"CHUNKING","message":"Splitting document into chunks"}
+
+data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"EMBEDDING","percent":50,"step":"EMBEDDING","message":"Generating vector embeddings"}
+
+data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"EMBEDDING","percent":70,"step":"EMBEDDING","message":"Generating vector embeddings (batch 1/2)"}
+
+data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"READY","percent":100,"step":"READY","message":"Document ingestion complete and ready for queries"}
+```
+
 ---
 
 ### Query & Retrieval Endpoints
 
-#### 6. Semantic Vector Search
+#### 7. Semantic Vector Search
 `POST /query/search`
 
 Performs vector similarity search over all `READY` document chunks. Throttled to **20 requests/minute**.
@@ -629,7 +702,7 @@ Performs vector similarity search over all `READY` document chunks. Throttled to
 }
 ```
 
-#### 7. Ask Question (RAG with Citations)
+#### 8. Ask Question (RAG with Citations)
 `POST /query/ask`
 
 Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a grounded answer with inline citations, and caches the result in Redis. Throttled to **5 requests/minute**.
@@ -662,7 +735,7 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 
 ### Observability Endpoints
 
-#### 8. Prometheus Metrics
+#### 9. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -700,7 +773,7 @@ vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
 ```
 
-#### 9. Health Check
+#### 10. Health Check
 `GET /health`
 
 Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.
@@ -793,19 +866,22 @@ npm run lint
 
 ### Test Suite Breakdown
 
-| Test Suite | Path | Type | Key Verifications Covered |
-|:---|:---|:---|:---|
-| **File Text Extraction** | `src/documents/utils/file-extractor.util.spec.ts` | Unit | Text extraction from PDF (`pdf-parse`), DOCX (`mammoth`), and TXT; title sanitization, whitespace collapsing, corruption detection, empty buffer rejection. |
-| **Documents Controller** | `src/documents/documents.controller.spec.ts` | Unit | JSON document ingestion, multipart file uploads, custom title overrides, automatic sanitized filename fallback, missing file `400 Bad Request` exceptions. |
-| **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
-| **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
-| **Vector Search Service** | `src/query/query.service.spec.ts` | Unit | Cosine distance `<->` operator SQL formatting, vector parameter serialization (`[0.1, 0.2, ...]`), and limit boundaries. |
-| **Documents Service** | `src/documents/documents.service.spec.ts` | Unit | Entity persistence, BullMQ job enqueueing, paginated `findAndCount` queries, cascade deletion of child chunks. |
-| **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
-| **Health Controller** | `src/health/health.controller.spec.ts` | Unit | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
-| **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
-| **Application Lifecycle E2E** | `test/app.e2e-spec.ts` | E2E | HTTP GET `/health`, `/metrics`, unhandled route 404 formatting, and global filter verification. |
-| **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | Full HTTP lifecycle for raw text ingestion, multipart file uploads (`.pdf`, `.docx`, `.txt`), paginated document listing with metadata, and cascade deletion. |
+| Test Suite | Path | Type | Tests | Key Verifications Covered |
+|:---|:---|:---|:---|:---|
+| **File Text Extraction** | `src/documents/utils/file-extractor.util.spec.ts` | Unit | 10 | Text extraction from PDF (`pdf-parse`), DOCX (`mammoth`), and TXT; title sanitization, whitespace collapsing, corruption detection, empty buffer rejection. |
+| **Documents Controller** | `src/documents/documents.controller.spec.ts` | Unit | 8 | JSON document ingestion, multipart file uploads, custom title overrides, automatic sanitized filename fallback, missing file exceptions, SSE progress stream delegation. |
+| **Documents Service** | `src/documents/documents.service.spec.ts` | Unit | 12 | Entity persistence, BullMQ job enqueueing, paginated `findAndCount` queries, cascade deletion of child chunks, SSE progress Observable with live event relay and teardown. |
+| **Ingestion Events Service** | `src/ingestion/ingestion-events.service.spec.ts` | Unit | 5 | In-memory event dispatching, multiple listener registrations, unsubscribing on disconnect, and optional Redis PubSub publishing. |
+| **Ingestion Queue Processor** | `src/ingestion/ingestion.processor.spec.ts` | Unit | 3 | BullMQ job processing, job progress updates, and real-time event broadcasting across CHUNKING (25%), EMBEDDING (50%-90%), READY (100%), and terminal FAILED. |
+| **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | 14 | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
+| **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | 6 | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
+| **Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 4 | Cosine distance `<->` operator SQL formatting, vector parameter serialization (`[0.1, 0.2, ...]`), and limit boundaries. |
+| **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | 10 | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
+| **Health Controller** | `src/health/health.controller.spec.ts` | Unit | 5 | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
+| **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | 6 | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
+| **App Controller** | `src/app.controller.spec.ts` | Unit | 1 | Root `/` route sanity test. |
+| **Application Lifecycle E2E** | `test/app.e2e-spec.ts` | E2E | 2 | HTTP GET `/health`, `/metrics`, unhandled route 404 formatting, and global filter verification. |
+| **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | 19 | Full HTTP lifecycle for raw text ingestion, multipart file uploads (`.pdf`, `.docx`, `.txt`), paginated document listing with metadata, cascade deletion, and live SSE progress streaming (`text/event-stream`). |
 
 > [!NOTE]
 > All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost.
@@ -927,13 +1003,18 @@ curl -X POST http://localhost:3000/documents \
   -H "x-api-key: your-secret-api-key" \
   -d '{"title": "DocMind Architecture", "content": "DocMind is an asynchronous RAG backend built on NestJS..."}'
 
-# 3. Semantic vector search
+# 3. Stream document ingestion progress in real-time (SSE)
+curl -N -H "Accept: text/event-stream" \
+  -H "x-api-key: your-secret-api-key" \
+  http://localhost:3000/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b/progress
+
+# 4. Semantic vector search
 curl -X POST http://localhost:3000/query/search \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-secret-api-key" \
   -d '{"query": "How does DocMind handle background processing?", "limit": 3}'
 
-# 4. Grounded RAG Q&A with citations
+# 5. Grounded RAG Q&A with citations
 curl -X POST http://localhost:3000/query/ask \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-secret-api-key" \
@@ -946,16 +1027,21 @@ curl -X POST http://localhost:3000/query/ask \
 
 ```text
 docmind/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  # GitHub Actions CI/CD pipeline (Postgres 16 + Redis 7 services)
 ├── Dockerfile                      # Multi-stage production container build (Node 20 Alpine)
 ├── docker-compose.yml              # PostgreSQL (pgvector), Redis & API container orchestration
 ├── .env.example                    # Environment configuration template
+├── .prettierignore                 # Prettier ignore patterns
+├── .prettierrc                     # Prettier styling standards
 ├── package.json
 ├── tsconfig.json
-├── test/                           # E2E Test suites & configurations
+├── test/                           # E2E Test suites & configurations (21 tests)
 │   ├── app.e2e-spec.ts             # Health, metrics & filter E2E tests
-│   ├── documents.e2e-spec.ts       # Document ingestion, file upload, pagination & deletion E2E tests
+│   ├── documents.e2e-spec.ts       # Text ingestion, file upload, pagination, deletion & SSE E2E tests
 │   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
-├── src/
+├── src/                            # Application source & unit tests (84 tests)
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
 │   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
 │   ├── __mocks__/                  # Pure ESM module mappings for high-speed isolated testing
@@ -988,9 +1074,9 @@ docmind/
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
 │   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) column
-│   │   ├── documents.controller.ts # Ingestion, file upload, paginated listing, status & DELETE endpoints
+│   │   ├── documents.controller.ts # Ingestion, file upload, pagination, status, DELETE & SSE endpoints
 │   │   ├── documents.controller.spec.ts
-│   │   ├── documents.service.ts    # Document state management, queue producer & deletion
+│   │   ├── documents.service.ts    # Document state management, queue producer, SSE stream & deletion
 │   │   ├── documents.service.spec.ts
 │   │   ├── documents.module.ts
 │   │   ├── dto/
@@ -1000,8 +1086,11 @@ docmind/
 │   │       ├── file-extractor.util.ts      # PDF, DOCX & TXT text extraction & title sanitization
 │   │       └── file-extractor.util.spec.ts
 │   ├── ingestion/
-│   │   ├── ingestion.processor.ts  # BullMQ worker: chunking -> batch embedding -> DB
-│   │   ├── chunking.util.ts        # Boundary-aware text chunking logic
+│   │   ├── ingestion.processor.ts       # BullMQ worker: chunking -> batch embedding -> DB + SSE progress
+│   │   ├── ingestion.processor.spec.ts
+│   │   ├── ingestion-events.service.ts  # In-memory EventEmitter + optional Redis PubSub progress publisher
+│   │   ├── ingestion-events.service.spec.ts
+│   │   ├── chunking.util.ts             # Boundary-aware text chunking logic
 │   │   ├── chunking.util.spec.ts
 │   │   └── ingestion.module.ts
 │   ├── embeddings/
