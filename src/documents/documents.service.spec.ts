@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -7,6 +9,7 @@ import { DocumentsService } from './documents.service';
 import { Document, DocumentStatus } from './document.entity';
 import { Chunk } from './chunk.entity';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
+import { IngestionEventsService } from '../ingestion/ingestion-events.service';
 
 describe('DocumentsService', () => {
   let service: DocumentsService;
@@ -23,6 +26,11 @@ describe('DocumentsService', () => {
   };
   let ingestionQueueMock: {
     add: jest.Mock;
+  };
+  let eventsServiceMock: {
+    onProgress: jest.Mock;
+    offProgress: jest.Mock;
+    emitProgress: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -43,6 +51,12 @@ describe('DocumentsService', () => {
       add: jest.fn(),
     };
 
+    eventsServiceMock = {
+      onProgress: jest.fn(),
+      offProgress: jest.fn(),
+      emitProgress: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DocumentsService,
@@ -57,6 +71,10 @@ describe('DocumentsService', () => {
         {
           provide: getQueueToken('ingestion'),
           useValue: ingestionQueueMock,
+        },
+        {
+          provide: IngestionEventsService,
+          useValue: eventsServiceMock,
         },
       ],
     }).compile();
@@ -86,7 +104,7 @@ describe('DocumentsService', () => {
         title: dto.title,
         sourceContent: dto.content,
         status: DocumentStatus.PENDING,
-        failureReason: null as any,
+        failureReason: null,
         createdAt: new Date('2026-09-06T08:00:00Z'),
       };
 
@@ -196,7 +214,7 @@ describe('DocumentsService', () => {
         title: 'Single Document',
         sourceContent: 'Detailed content',
         status: DocumentStatus.READY,
-        failureReason: null as any,
+        failureReason: null,
         createdAt: new Date('2026-09-06T08:00:00Z'),
       };
 
@@ -233,7 +251,7 @@ describe('DocumentsService', () => {
         title: 'Doc to Delete',
         sourceContent: 'Some content',
         status: DocumentStatus.READY,
-        failureReason: null as any,
+        failureReason: null,
         createdAt: new Date('2026-09-06T08:00:00Z'),
       };
 
@@ -286,6 +304,176 @@ describe('DocumentsService', () => {
       });
       expect(chunkRepoMock.delete).not.toHaveBeenCalled();
       expect(documentRepoMock.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getProgressStream', () => {
+    const mockPendingDoc: Document = {
+      id: 'doc-stream-1',
+      title: 'Stream Doc',
+      sourceContent: 'Content to stream',
+      status: DocumentStatus.PENDING,
+      failureReason: null,
+      createdAt: new Date(),
+    };
+
+    it('should immediately emit current document status and relay live progress updates', (done) => {
+      documentRepoMock.findOneBy.mockResolvedValue({ ...mockPendingDoc });
+
+      let capturedListener: ((event: any) => void) | undefined;
+      eventsServiceMock.onProgress.mockImplementation(
+        (id: string, listener: any) => {
+          capturedListener = listener;
+        },
+      );
+
+      const events: any[] = [];
+      const stream$ = service.getProgressStream('doc-stream-1');
+
+      stream$.subscribe({
+        next: (event) => {
+          events.push(event);
+
+          // Once initial PENDING status is received, trigger live CHUNKING & READY events
+          if (events.length === 1 && capturedListener) {
+            capturedListener({
+              documentId: 'doc-stream-1',
+              status: DocumentStatus.CHUNKING,
+              step: 'CHUNKING',
+              percent: 25,
+              message: 'Splitting document into chunks',
+            });
+
+            capturedListener({
+              documentId: 'doc-stream-1',
+              status: DocumentStatus.READY,
+              step: 'READY',
+              percent: 100,
+              message: 'Document ingestion complete and ready for queries',
+            });
+          }
+        },
+        complete: () => {
+          expect(events).toHaveLength(3);
+
+          // 1. Initial event from DB
+          expect(events[0].data).toEqual(
+            expect.objectContaining({
+              documentId: 'doc-stream-1',
+              status: DocumentStatus.PENDING,
+              percent: 0,
+              step: 'PENDING',
+            }),
+          );
+
+          // 2. Live CHUNKING event
+          expect(events[1].data).toEqual(
+            expect.objectContaining({
+              documentId: 'doc-stream-1',
+              status: DocumentStatus.CHUNKING,
+              percent: 25,
+              step: 'CHUNKING',
+            }),
+          );
+
+          // 3. Live READY event
+          expect(events[2].data).toEqual(
+            expect.objectContaining({
+              documentId: 'doc-stream-1',
+              status: DocumentStatus.READY,
+              percent: 100,
+              step: 'READY',
+            }),
+          );
+
+          done();
+        },
+      });
+    });
+
+    it('should complete immediately if document is already in READY terminal state', (done) => {
+      documentRepoMock.findOneBy.mockResolvedValue({
+        ...mockPendingDoc,
+        status: DocumentStatus.READY,
+      });
+
+      const events: any[] = [];
+      const stream$ = service.getProgressStream('doc-stream-1');
+
+      stream$.subscribe({
+        next: (event) => events.push(event),
+        complete: () => {
+          expect(events).toHaveLength(1);
+          expect(events[0].data).toEqual(
+            expect.objectContaining({
+              status: DocumentStatus.READY,
+              percent: 100,
+              step: 'READY',
+            }),
+          );
+          done();
+        },
+      });
+    });
+
+    it('should complete immediately if document is already in FAILED terminal state', (done) => {
+      documentRepoMock.findOneBy.mockResolvedValue({
+        ...mockPendingDoc,
+        status: DocumentStatus.FAILED,
+        failureReason: 'Corrupted format',
+      });
+
+      const events: any[] = [];
+      const stream$ = service.getProgressStream('doc-stream-1');
+
+      stream$.subscribe({
+        next: (event) => events.push(event),
+        complete: () => {
+          expect(events).toHaveLength(1);
+          expect(events[0].data).toEqual(
+            expect.objectContaining({
+              status: DocumentStatus.FAILED,
+              percent: 0,
+              step: 'FAILED',
+              error: 'Corrupted format',
+            }),
+          );
+          done();
+        },
+      });
+    });
+
+    it('should clean up listener via offProgress when subscriber unsubscribes', () => {
+      documentRepoMock.findOneBy.mockResolvedValue({ ...mockPendingDoc });
+
+      const stream$ = service.getProgressStream('doc-stream-1');
+      const subscription = stream$.subscribe();
+
+      expect(eventsServiceMock.onProgress).toHaveBeenCalledWith(
+        'doc-stream-1',
+        expect.any(Function),
+      );
+
+      subscription.unsubscribe();
+
+      expect(eventsServiceMock.offProgress).toHaveBeenCalledWith(
+        'doc-stream-1',
+        expect.any(Function),
+      );
+    });
+
+    it('should emit error on subscriber if document is not found', (done) => {
+      documentRepoMock.findOneBy.mockResolvedValue(null);
+
+      const stream$ = service.getProgressStream('non-existent');
+
+      stream$.subscribe({
+        next: () => done.fail('Should not emit next on not found'),
+        error: (err) => {
+          expect(err).toBeInstanceOf(NotFoundException);
+          done();
+        },
+      });
     });
   });
 });

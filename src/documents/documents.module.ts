@@ -5,6 +5,7 @@ import { Document } from './document.entity';
 import { Chunk } from './chunk.entity';
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
+import { IngestionModule } from '../ingestion/ingestion.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { DocumentsService } from './documents.service';
     BullModule.registerQueue({
       name: 'ingestion',
     }),
+    IngestionModule,
   ],
   controllers: [DocumentsController],
   providers: [DocumentsService],

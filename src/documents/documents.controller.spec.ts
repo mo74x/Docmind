@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import 'multer';
@@ -38,6 +39,7 @@ describe('DocumentsController', () => {
         message: 'Document and associated chunks deleted successfully',
         id: 'mock-doc-uuid',
       }),
+      getProgressStream: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -141,6 +143,18 @@ describe('DocumentsController', () => {
       const result = await controller.findOne('mock-doc-uuid');
       expect(service.findOne).toHaveBeenCalledWith('mock-doc-uuid');
       expect(result.id).toBe('mock-doc-uuid');
+    });
+  });
+
+  describe('streamProgress', () => {
+    it('should delegate to documentsService.getProgressStream', () => {
+      const mockObservable = { subscribe: jest.fn() } as any;
+      service.getProgressStream = jest.fn().mockReturnValue(mockObservable);
+
+      const result = controller.streamProgress('mock-doc-uuid');
+
+      expect(service.getProgressStream).toHaveBeenCalledWith('mock-doc-uuid');
+      expect(result).toBe(mockObservable);
     });
   });
 

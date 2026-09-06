@@ -1,13 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, MessageEvent } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { Document } from './document.entity';
+import { Observable } from 'rxjs';
+import { Document, DocumentStatus } from './document.entity';
 import { Chunk } from './chunk.entity';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import {
+  IngestionEventsService,
+  IngestionProgressEvent,
+} from '../ingestion/ingestion-events.service';
 
 @Injectable()
 export class DocumentsService {
@@ -18,6 +23,7 @@ export class DocumentsService {
     private readonly chunkRepo: Repository<Chunk>,
     @InjectQueue('ingestion')
     private readonly ingestionQueue: Queue,
+    private readonly ingestionEventsService: IngestionEventsService,
   ) {}
 
   async submitDocument(dto: IngestDocumentDto): Promise<Document> {
@@ -76,5 +82,108 @@ export class DocumentsService {
       message: 'Document and associated chunks deleted successfully',
       id: document.id,
     };
+  }
+
+  /**
+   * Returns an RxJS Observable streaming real-time Server-Sent Events (SSE)
+   * for the document ingestion progress.
+   */
+  getProgressStream(id: string): Observable<MessageEvent> {
+    return new Observable<MessageEvent>((subscriber) => {
+      let isTerminal = false;
+
+      // 1. Register listener for live events first to prevent race conditions
+      const listener = (event: IngestionProgressEvent) => {
+        subscriber.next({
+          data: {
+            documentId: event.documentId,
+            status: event.status,
+            percent: event.percent,
+            step: event.step,
+            message: event.message,
+            ...(event.error ? { error: event.error } : {}),
+          },
+        });
+
+        if (
+          event.status === DocumentStatus.READY ||
+          event.status === DocumentStatus.FAILED
+        ) {
+          isTerminal = true;
+          subscriber.complete();
+        }
+      };
+
+      this.ingestionEventsService.onProgress(id, listener);
+
+      // 2. Fetch current document status from DB immediately
+      this.findOne(id)
+        .then((document) => {
+          if (!isTerminal) {
+            subscriber.next({
+              data: {
+                documentId: document.id,
+                status: document.status,
+                percent: this.getPercentForStatus(document.status),
+                step: document.status,
+                message: this.getMessageForStatus(document.status),
+                ...(document.failureReason
+                  ? { error: document.failureReason }
+                  : {}),
+              },
+            });
+
+            if (
+              document.status === DocumentStatus.READY ||
+              document.status === DocumentStatus.FAILED
+            ) {
+              isTerminal = true;
+              subscriber.complete();
+            }
+          }
+        })
+        .catch((err) => {
+          subscriber.error(err);
+        });
+
+      // 3. Teardown logic when client disconnects
+      return () => {
+        this.ingestionEventsService.offProgress(id, listener);
+      };
+    });
+  }
+
+  private getPercentForStatus(status: DocumentStatus): number {
+    switch (status) {
+      case DocumentStatus.PENDING:
+        return 0;
+      case DocumentStatus.CHUNKING:
+        return 25;
+      case DocumentStatus.EMBEDDING:
+        return 50;
+      case DocumentStatus.READY:
+        return 100;
+      case DocumentStatus.FAILED:
+        return 0;
+      default:
+        return 0;
+    }
+  }
+
+  private getMessageForStatus(status: DocumentStatus): string {
+    switch (status) {
+      case DocumentStatus.PENDING:
+        return 'Document queued for ingestion';
+      case DocumentStatus.CHUNKING:
+        return 'Splitting document into chunks';
+      case DocumentStatus.EMBEDDING:
+        return 'Generating vector embeddings';
+      case DocumentStatus.READY:
+        return 'Document ingestion complete and ready for queries';
+      case DocumentStatus.FAILED:
+        return 'Document ingestion failed';
+      default:
+        return 'Processing document';
+    }
   }
 }

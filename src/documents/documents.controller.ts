@@ -9,7 +9,10 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  Sse,
+  MessageEvent,
 } from '@nestjs/common';
+import { Observable } from 'rxjs';
 import {
   ApiTags,
   ApiOperation,
@@ -126,6 +129,24 @@ export class DocumentsController {
       failureReason: document.failureReason,
       createdAt: document.createdAt,
     };
+  }
+
+  @Sse(':id/progress')
+  @ApiOperation({
+    summary:
+      'Stream real-time document ingestion progress via Server-Sent Events (SSE)',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'SSE stream delivering real-time progress events (PENDING -> CHUNKING 25% -> EMBEDDING 50..90% -> READY 100% / FAILED)',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Document with the specified ID was not found',
+  })
+  streamProgress(@Param('id') id: string): Observable<MessageEvent> {
+    return this.documentsService.getProgressStream(id);
   }
 
   @Delete(':id')

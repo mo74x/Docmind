@@ -12,6 +12,7 @@ import { AppModule } from '../src/app.module';
 import { DocumentsService } from '../src/documents/documents.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { DocumentStatus } from '../src/documents/document.entity';
+import { of, throwError } from 'rxjs';
 
 describe('DocumentsController (e2e)', () => {
   let app: INestApplication;
@@ -30,6 +31,7 @@ describe('DocumentsController (e2e)', () => {
     findAll: jest.fn(),
     findOne: jest.fn(),
     remove: jest.fn(),
+    getProgressStream: jest.fn(),
   };
 
   beforeAll(async () => {
@@ -388,6 +390,54 @@ describe('DocumentsController (e2e)', () => {
         }),
       );
       expect(documentsServiceMock.remove).toHaveBeenCalledWith(nonExistentId);
+    });
+  });
+
+  describe('GET /documents/:id/progress', () => {
+    it('should return 200 with text/event-stream content-type and deliver SSE progress data', async () => {
+      const eventData = {
+        documentId: mockDocument.id,
+        status: DocumentStatus.READY,
+        percent: 100,
+        step: 'READY',
+        message: 'Document ingestion complete and ready for queries',
+      };
+      const stream$ = of({ data: eventData });
+      documentsServiceMock.getProgressStream.mockReturnValue(stream$);
+
+      const response = await request(app.getHttpServer())
+        .get(`/documents/${mockDocument.id}/progress`)
+        .expect(200)
+        .expect('Content-Type', /text\/event-stream/);
+
+      expect(response.text).toContain(`data: ${JSON.stringify(eventData)}`);
+      expect(documentsServiceMock.getProgressStream).toHaveBeenCalledWith(
+        mockDocument.id,
+      );
+    });
+
+    it('should return 404 Not Found via AllExceptionsFilter if document does not exist', async () => {
+      const nonExistentId = 'non-existent-uuid';
+      const error$ = throwError(
+        () =>
+          new NotFoundException(`Document with ID ${nonExistentId} not found`),
+      );
+      documentsServiceMock.getProgressStream.mockReturnValue(error$);
+
+      const response = await request(app.getHttpServer())
+        .get(`/documents/${nonExistentId}/progress`)
+        .expect(404);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Document with ID ${nonExistentId} not found`,
+        }),
+      );
+      expect(documentsServiceMock.getProgressStream).toHaveBeenCalledWith(
+        nonExistentId,
+      );
     });
   });
 });

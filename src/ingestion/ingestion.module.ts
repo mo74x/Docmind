@@ -4,6 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { Document } from '../documents/document.entity';
 import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { IngestionProcessor } from './ingestion.processor';
+import { IngestionEventsService } from './ingestion-events.service';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { IngestionProcessor } from './ingestion.processor';
     }),
     EmbeddingsModule,
   ],
-  providers: [IngestionProcessor],
-  exports: [BullModule],
+  providers: [IngestionProcessor, IngestionEventsService],
+  exports: [BullModule, IngestionEventsService],
 })
 export class IngestionModule {}

@@ -32,7 +32,7 @@ export class Document {
   status: DocumentStatus;
 
   @Column({ type: 'text', nullable: true })
-  failureReason: string;
+  failureReason: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
