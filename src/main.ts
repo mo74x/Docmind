@@ -47,6 +47,8 @@ async function bootstrap() {
     .setTitle('DocMind API')
     .setDescription('RAG-Based Document Question Answering Backend')
     .setVersion('1.0')
+    .addApiKey({ type: 'apiKey', name: 'x-api-key', in: 'header' }, 'x-api-key')
+    .addSecurityRequirements('x-api-key')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

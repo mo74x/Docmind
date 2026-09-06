@@ -6,6 +6,7 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import Redis from 'ioredis';
+import { Public } from '../auth/decorators/public.decorator';
 
 interface ServiceHealth {
   status: 'up' | 'down';
@@ -13,6 +14,7 @@ interface ServiceHealth {
   error?: string;
 }
 
+@Public()
 @ApiTags('Health')
 @Controller('health')
 export class HealthController {
@@ -37,7 +39,7 @@ export class HealthController {
     const startTime = Date.now();
     const services: Record<string, ServiceHealth> = {};
 
-    // 1. Check PostgreSQL database connectivity & latency
+    // Check PostgreSQL database connectivity & latency
     const dbStart = Date.now();
     try {
       await this.dataSource.query('SELECT 1');
@@ -53,7 +55,7 @@ export class HealthController {
       };
     }
 
-    // 2. Check Redis connectivity & latency
+    // Check Redis connectivity & latency
     const redisStart = Date.now();
     try {
       const pingResponse = await this.redis.ping();

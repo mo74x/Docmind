@@ -1,5 +1,6 @@
 export default () => ({
   port: parseInt(process.env.PORT || '3000', 10),
+  apiKey: process.env.API_KEY,
   database: {
     url: process.env.DATABASE_URL,
   },
