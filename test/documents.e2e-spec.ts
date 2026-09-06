@@ -114,6 +114,94 @@ describe('DocumentsController (e2e)', () => {
     });
   });
 
+  describe('POST /documents/upload', () => {
+    it('should successfully upload a .txt file with custom title and return 201 Created', async () => {
+      documentsServiceMock.submitDocument.mockResolvedValue(mockDocument);
+
+      const fileBuffer = Buffer.from(
+        'DocMind is an intelligent document RAG platform.',
+      );
+
+      const response = await request(app.getHttpServer())
+        .post('/documents/upload')
+        .field('title', 'Custom Uploaded Title')
+        .attach('file', fileBuffer, 'sample.txt')
+        .expect(201);
+
+      expect(response.body).toEqual({
+        message: 'Document uploaded and queued for ingestion',
+        id: mockDocument.id,
+        status: DocumentStatus.PENDING,
+      });
+
+      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith({
+        title: 'Custom Uploaded Title',
+        content: 'DocMind is an intelligent document RAG platform.',
+      });
+    });
+
+    it('should default title to filename when title field is not provided', async () => {
+      documentsServiceMock.submitDocument.mockResolvedValue(mockDocument);
+
+      const fileBuffer = Buffer.from(
+        'Plain text file content for RAG processing.',
+      );
+
+      const response = await request(app.getHttpServer())
+        .post('/documents/upload')
+        .attach('file', fileBuffer, 'docmind-overview.txt')
+        .expect(201);
+
+      expect(response.body).toEqual({
+        message: 'Document uploaded and queued for ingestion',
+        id: mockDocument.id,
+        status: DocumentStatus.PENDING,
+      });
+
+      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith({
+        title: 'docmind-overview',
+        content: 'Plain text file content for RAG processing.',
+      });
+    });
+
+    it('should return 400 Bad Request when no file is attached', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/documents/upload')
+        .field('title', 'No File Attached')
+        .expect(400);
+
+      expect(response.body.statusCode).toBe(400);
+      expect(response.body.message).toContain('File is required');
+      expect(documentsServiceMock.submitDocument).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 Bad Request when uploading an unsupported file format', async () => {
+      const fileBuffer = Buffer.from('binary-content');
+
+      const response = await request(app.getHttpServer())
+        .post('/documents/upload')
+        .attach('file', fileBuffer, 'executable.exe')
+        .expect(400);
+
+      expect(response.body.statusCode).toBe(400);
+      expect(response.body.message).toContain('Unsupported file format');
+      expect(documentsServiceMock.submitDocument).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 Bad Request when uploaded file is empty', async () => {
+      const fileBuffer = Buffer.from('');
+
+      const response = await request(app.getHttpServer())
+        .post('/documents/upload')
+        .attach('file', fileBuffer, 'empty.txt')
+        .expect(400);
+
+      expect(response.body.statusCode).toBe(400);
+      expect(response.body.message).toContain('Uploaded file is empty');
+      expect(documentsServiceMock.submitDocument).not.toHaveBeenCalled();
+    });
+  });
+
   describe('GET /documents', () => {
     const paginatedResponse = {
       data: [mockDocument],

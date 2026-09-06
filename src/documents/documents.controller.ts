@@ -6,12 +6,29 @@ import {
   Param,
   Delete,
   Query,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiQuery,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import 'multer';
 import { DocumentsService } from './documents.service';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
+import { UploadDocumentDto } from './dto/upload-document.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import {
+  extractTextFromFile,
+  sanitizeTitleFromFilename,
+} from './utils/file-extractor.util';
 
 @ApiTags('Documents')
 @Controller('documents')
@@ -25,6 +42,53 @@ export class DocumentsController {
     const document = await this.documentsService.submitDocument(dto);
     return {
       message: 'Document queued for ingestion',
+      id: document.id,
+      status: document.status,
+    };
+  }
+
+  @Post('upload')
+  @ApiOperation({
+    summary: 'Upload a document file (PDF, DOCX, TXT) for RAG ingestion',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description: 'Document file and optional title',
+    type: UploadDocumentDto,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Document uploaded and queued for ingestion',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid file, unsupported format, file exceeds 10MB, or contains no readable text',
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    }),
+  )
+  async uploadFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadDocumentDto,
+  ) {
+    if (!file) {
+      throw new BadRequestException('File is required');
+    }
+
+    const content = await extractTextFromFile(file);
+    const title =
+      dto?.title?.trim() || sanitizeTitleFromFilename(file.originalname);
+
+    const document = await this.documentsService.submitDocument({
+      title,
+      content,
+    });
+
+    return {
+      message: 'Document uploaded and queued for ingestion',
       id: document.id,
       status: document.status,
     };
