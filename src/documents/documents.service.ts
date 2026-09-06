@@ -4,14 +4,16 @@ import { Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Document } from './document.entity';
+import { Chunk } from './chunk.entity';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
 
 @Injectable()
 export class DocumentsService {
-  [x: string]: any;
   constructor(
     @InjectRepository(Document)
     private readonly documentRepo: Repository<Document>,
+    @InjectRepository(Chunk)
+    private readonly chunkRepo: Repository<Chunk>,
     @InjectQueue('ingestion')
     private readonly ingestionQueue: Queue,
   ) {}
@@ -51,5 +53,15 @@ export class DocumentsService {
       throw new NotFoundException(`Document with ID ${id} not found`);
     }
     return document;
+  }
+
+  async remove(id: string): Promise<{ message: string; id: string }> {
+    const document = await this.findOne(id);
+    await this.chunkRepo.delete({ documentId: id });
+    await this.documentRepo.delete(id);
+    return {
+      message: 'Document and associated chunks deleted successfully',
+      id: document.id,
+    };
   }
 }

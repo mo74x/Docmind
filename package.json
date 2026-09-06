@@ -84,6 +84,11 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^@nestjs/config$": "<rootDir>/__mocks__/nestjs-config.ts",
+      "^@nestjs/typeorm$": "<rootDir>/__mocks__/nestjs-typeorm.ts",
+      "^@nestjs/bullmq$": "<rootDir>/__mocks__/nestjs-bullmq.ts"
+    }
   }
 }
