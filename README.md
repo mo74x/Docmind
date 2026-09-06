@@ -10,8 +10,9 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Redis](https://img.shields.io/badge/Redis-7-dc382d?logo=redis&logoColor=white)](https://redis.io)
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)](https://openai.com)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-53%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
-[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-14%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-69%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-18%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
@@ -23,11 +24,13 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 - [Architecture](#architecture)
 - [Technology Stack](#technology-stack)
 - [System Design & Workflows](#system-design--workflows)
-  - [1. Asynchronous Ingestion Pipeline](#1-asynchronous-ingestion-pipeline)
-  - [2. Semantic Search & RAG Q&A Pipeline](#2-semantic-search--rag-qa-pipeline)
-  - [3. Intelligent Redis Caching](#3-intelligent-redis-caching)
-  - [4. Rate Limiting & Protection](#4-rate-limiting--protection)
-  - [5. API Key Authentication & Route Security](#5-api-key-authentication--route-security)
+  - [1. Multi-Format File Upload & Text Extraction](#1-multi-format-file-upload--text-extraction)
+  - [2. Asynchronous Ingestion Pipeline](#2-asynchronous-ingestion-pipeline)
+  - [3. Semantic Search & RAG Q&A Pipeline](#3-semantic-search--rag-qa-pipeline)
+  - [4. Intelligent Redis Caching](#4-intelligent-redis-caching)
+  - [5. Rate Limiting & Protection](#5-rate-limiting--protection)
+  - [6. API Key Authentication & Route Security](#6-api-key-authentication--route-security)
+  - [7. Production Docker & Container Orchestration](#7-production-docker--container-orchestration)
 - [Observability & Monitoring](#observability--monitoring)
   - [Structured Logging (Winston)](#structured-logging-winston)
   - [Prometheus Metrics](#prometheus-metrics)
@@ -57,6 +60,7 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 
 | Category | Feature | Description |
 |:---|:---|:---|
+| **Ingestion** | Multi-Format File Upload | Upload binary documents (`.pdf`, `.docx`, `.txt` up to 10MB) via `POST /documents/upload` with automatic text extraction, title sanitization, and background RAG queueing. |
 | **Ingestion** | Asynchronous Pipeline | Ingest large texts without blocking HTTP clients. Track lifecycle states (`PENDING` → `CHUNKING` → `EMBEDDING` → `READY` / `FAILED`) in real-time. |
 | **Documents** | Scalable Pagination | TypeORM `findAndCount` pagination supporting `page`, `limit` (1-100), and `order` (`ASC`/`DESC`), with automatic cascade deletion of chunks on document removal. |
 | **Chunking** | Context-Preserving | Boundary-aware splitting prioritizes word structures with sliding window overlaps to prevent semantic cutoff. |
@@ -64,9 +68,10 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
 | **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
 | **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
+| **DevOps** | Multi-Stage Docker | Hardened multi-stage `Dockerfile` (Node 20 Alpine, unprivileged `node` user) with `docker-compose.yml` orchestrating API, PostgreSQL (`pgvector`), and Redis with healthchecks. |
 | **Observability** | Prometheus + Winston | Production-grade metrics (`/metrics`) with custom histograms and counters, plus structured JSON logging with timestamps and execution deltas. |
 | **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites covering 100% of critical paths with isolated in-memory test mocks. |
-| **Docs** | Interactive Swagger | Comprehensive OpenAPI spec with API Key security definitions auto-served at `/api/docs`. |
+| **Docs** | Interactive Swagger | Comprehensive OpenAPI spec with API Key security definitions and multipart file upload schemas at `/api/docs`. |
 
 ---
 
@@ -83,9 +88,11 @@ graph TB
         AUTH[API Key Guard / @Public Decorator]
         THROTTLE[Redis-Backed Rate Limiter]
         VALIDATION[DTO Validation Pipe]
+        MULTER[Multer Multipart File Interceptor]
     end
 
     subgraph "Ingestion Subsystem"
+        EXTRACTOR[File Extractor Utility<br/>PDF, DOCX, TXT]
         DOC_SVC[Documents Service]
         BULLMQ[BullMQ Ingestion Queue]
         WORKER[Ingestion Processor]
@@ -117,8 +124,14 @@ graph TB
     THROTTLE --> GATEWAY
     GATEWAY --> VALIDATION
 
-    %% Ingestion Flow
+    %% Raw Text Ingestion Flow
     VALIDATION -->|POST /documents| DOC_SVC
+
+    %% File Upload Ingestion Flow
+    GATEWAY -->|POST /documents/upload| MULTER
+    MULTER -->|buffer & mimetype| EXTRACTOR
+    EXTRACTOR -->|extracted text & sanitized title| DOC_SVC
+
     DOC_SVC -->|save PENDING| PG
     DOC_SVC -->|enqueue| BULLMQ
     BULLMQ --> REDIS
@@ -154,6 +167,8 @@ graph TB
 | **Runtime** | Node.js | v20+ LTS |
 | **Framework** | NestJS | v11 modular enterprise backend framework |
 | **Language** | TypeScript | v5.7 with strict type checking |
+| **File Processing** | `pdf-parse` & `mammoth` | Multi-format text extraction from PDF, DOCX, and TXT files |
+| **Containerization** | Docker & Docker Compose | Hardened multi-stage build (Node 20 Alpine) & orchestrated multi-container stack |
 | **Database** | PostgreSQL 16 | Relational storage for documents and text chunks |
 | **Vector Engine** | `pgvector` | Native `vector(1536)` data type with `ivfflat` cosine similarity index |
 | **ORM** | TypeORM | Entity mappings and relational transactions; raw SQL for vector operations |
@@ -164,13 +179,66 @@ graph TB
 | **Metrics** | Prometheus + `prom-client` | Custom counters, histograms, and default Node.js runtime metrics via `@willsoto/nestjs-prometheus` |
 | **Logging** | Winston + `nest-winston` | Structured JSON logging with timestamps, execution deltas (`ms`), and service metadata |
 | **Validation** | `class-validator` / `class-transformer` | Runtime schema validation & DTO transformation |
-| **Documentation** | Swagger / OpenAPI | Auto-generated interactive API documentation |
+| **Documentation** | Swagger / OpenAPI | Auto-generated interactive API documentation with multipart file schemas |
 
 ---
 
 ## System Design & Workflows
 
-### 1. Asynchronous Ingestion Pipeline
+### 1. Multi-Format File Upload & Text Extraction
+
+In addition to direct JSON string ingestion, DocMind provides a dedicated multipart file upload endpoint (`POST /documents/upload`) capable of parsing binary documents up to 10MB:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Controller as Documents Controller
+    participant Interceptor as Multer FileInterceptor
+    participant Extractor as File Extractor Utility
+    participant Service as Documents Service
+    participant Queue as BullMQ Queue
+    participant DB as PostgreSQL
+
+    Client->>Controller: POST /documents/upload (multipart/form-data: file, title?)
+    Controller->>Interceptor: Intercept & enforce 10MB limit
+    Interceptor-->>Controller: Multer.File { originalname, buffer, mimetype, size }
+    Controller->>Extractor: extractTextFromFile(file)
+    
+    alt PDF File (.pdf)
+        Extractor->>Extractor: pdf-parse(buffer) -> plaintext
+    else DOCX File (.docx)
+        Extractor->>Extractor: mammoth.extractRawText(buffer) -> plaintext
+    else Plain Text (.txt)
+        Extractor->>Extractor: buffer.toString('utf-8') -> plaintext
+    else Unsupported / Empty
+        Extractor-->>Controller: 400 Bad Request
+    end
+
+    Extractor->>Extractor: Normalize line endings & collapse whitespace
+    Extractor-->>Controller: Clean plaintext
+    
+    alt Custom title omitted
+        Controller->>Extractor: sanitizeTitleFromFilename(file.originalname)
+        Extractor-->>Controller: Derived title
+    end
+
+    Controller->>Service: submitDocument({ title, content })
+    Service->>DB: INSERT Document (status: PENDING)
+    Service->>Queue: add("ingest-doc", { documentId })
+    Service-->>Controller: Document record
+    Controller-->>Client: 201 Created { id, status: PENDING }
+```
+
+- **Format Detection**: Inspects MIME type and file extension to route to the appropriate parser:
+  - **PDF (`application/pdf`)**: Parsed via `pdf-parse` buffer stream extraction.
+  - **DOCX (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)**: Parsed via `mammoth.extractRawText`.
+  - **Plain Text (`text/plain`, `.txt`)**: Decoded directly from UTF-8 buffers.
+- **Text Normalization**: Unifies Windows (`\r\n`) and Unix (`\n`) newlines, collapses 3+ consecutive linebreaks to double newlines, and trims surrounding whitespace.
+- **Title Sanitization**: When an optional `title` is not provided in form data, `sanitizeTitleFromFilename` automatically strips the file extension and whitespace to generate a human-readable title.
+- **Fail-Fast Validation**: Empty files, corrupt binary archives, or files yielding zero readable characters immediately throw descriptive `400 Bad Request` exceptions before touching database or queue resources.
+
+### 2. Asynchronous Ingestion Pipeline
 
 When a document is uploaded, it is assigned a `PENDING` state and pushed to BullMQ. The client receives an immediate response with the document ID, avoiding HTTP timeouts on large texts.
 
@@ -212,7 +280,7 @@ sequenceDiagram
     Controller-->>Client: 200 OK { id, status: READY }
 ```
 
-### 2. Semantic Search & RAG Q&A Pipeline
+### 3. Semantic Search & RAG Q&A Pipeline
 
 Queries are converted into embeddings and matched against document chunks via vector cosine distance (`c.embedding <-> $1`). For Q&A requests, retrieved chunks are injected into a strict system prompt provided to `gpt-4o-mini`.
 
@@ -258,24 +326,37 @@ sequenceDiagram
     end
 ```
 
-### 3. Intelligent Redis Caching
+### 4. Intelligent Redis Caching
 
 The `AnswerService` normalizes user queries (case folding, stripping punctuation, collapsing whitespace) before computing a deterministic SHA-256 hash. Cached results expire after 24 hours (86,400 seconds) and include complete source metadata and citations.
 
-### 4. Rate Limiting & Protection
+### 5. Rate Limiting & Protection
 
 DocMind uses `@nestjs/throttler` backed by Redis storage to enforce rate limits across distributed instances:
 - **Global / Default**: 10 requests / minute
 - **`/query/search`**: 20 requests / minute
 - **`/query/ask`**: 5 requests / minute
 
-### 5. API Key Authentication & Route Security
+### 6. API Key Authentication & Route Security
 
 DocMind protects all sensitive API endpoints using a global `ApiKeyGuard` bound via `APP_GUARD`:
 - **Dual-Header Support**: Accepts authentication credentials via either `x-api-key: <token>` or standard `Authorization: Bearer <token>`.
 - **Public Endpoint Exemption**: Endpoints such as `/health`, `/metrics`, and `/api/docs` are marked with the `@Public()` decorator to allow unrestricted access for Prometheus scraping, load balancers, and documentation inspection.
 - **Zero-Friction Development Mode**: If `API_KEY` is not defined in the environment, the guard automatically logs a development warning and allows incoming requests to pass without rejection.
 - **OpenAPI / Swagger Integration**: The OpenAPI specification at `/api/docs` incorporates the `x-api-key` security scheme directly, allowing interactive authenticated test queries right from the browser.
+
+### 7. Production Docker & Container Orchestration
+
+DocMind includes an enterprise-grade containerization setup designed for minimal footprint and maximum security:
+
+- **Multi-Stage Build (`Dockerfile`)**:
+  - **`builder` stage**: Installs all build tools and TypeScript compilers in a clean Alpine environment to compile source files to `/app/dist`.
+  - **`runner` stage**: Produces a slim production image containing only production dependencies (`npm ci --only=production`) and compiled JavaScript artifacts, drastically reducing attack surface and image size.
+- **Security Hardening**: Drops root privileges by executing under the default non-root `node` user (`USER node`).
+- **Compose Orchestration (`docker-compose.yml`)**:
+  - Automatically spins up the `api`, `postgres` (`pgvector/pgvector:pg16`), and `redis` (`redis:7-alpine`) services.
+  - Implements container-level healthchecks (`pg_isready`, `redis-cli ping`).
+  - Utilizes `depends_on` with `condition: service_healthy` so the NestJS application only boots after database and cache services are fully operational.
 
 ---
 
@@ -407,7 +488,50 @@ Queues a new document for background chunking, embedding, and vector indexing.
 }
 ```
 
-#### 2. List Documents
+#### 2. Upload Document File (PDF, DOCX, TXT)
+`POST /documents/upload`
+
+Uploads a document file (`multipart/form-data`) for automated text extraction and background RAG queueing. Maximum file size is **10MB**.
+
+**Form Data Fields**
+| Field | Type | Required | Description |
+|:---|:---|:---|:---|
+| `file` | binary | **Yes** | Supported formats: `.pdf` (`application/pdf`), `.docx` (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`), `.txt` (`text/plain`). Max 10MB. |
+| `title` | string | No | Custom document title override. If omitted, title defaults to sanitized filename (e.g. `quarterly_report.pdf` → `quarterly_report`). |
+
+**Response (`201 Created`)**
+```json
+{
+  "message": "Document uploaded and queued for ingestion",
+  "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+  "status": "PENDING"
+}
+```
+
+**Common Error Responses (`400 Bad Request`)**
+```json
+// Missing file attachment
+{
+  "statusCode": 400,
+  "timestamp": "2026-09-02T10:00:00.000Z",
+  "path": "/documents/upload",
+  "method": "POST",
+  "error": "Bad Request",
+  "message": "File is required"
+}
+
+// Unsupported extension or mime-type
+{
+  "statusCode": 400,
+  "timestamp": "2026-09-02T10:00:00.000Z",
+  "path": "/documents/upload",
+  "method": "POST",
+  "error": "Bad Request",
+  "message": "Unsupported file format. Supported formats are .pdf, .docx, and .txt"
+}
+```
+
+#### 3. List Documents
 `GET /documents`
 
 Retrieves a paginated list of ingested documents ordered chronologically.
@@ -442,7 +566,7 @@ Retrieves a paginated list of ingested documents ordered chronologically.
 }
 ```
 
-#### 3. Get Document Status
+#### 4. Get Document Status
 `GET /documents/:id`
 
 **Response (`200 OK`)**
@@ -456,7 +580,7 @@ Retrieves a paginated list of ingested documents ordered chronologically.
 }
 ```
 
-#### 4. Delete Document
+#### 5. Delete Document
 `DELETE /documents/:id`
 
 Deletes a document record and purges all associated text chunks and vector embeddings from PostgreSQL.
@@ -473,7 +597,7 @@ Deletes a document record and purges all associated text chunks and vector embed
 
 ### Query & Retrieval Endpoints
 
-#### 5. Semantic Vector Search
+#### 6. Semantic Vector Search
 `POST /query/search`
 
 Performs vector similarity search over all `READY` document chunks. Throttled to **20 requests/minute**.
@@ -503,7 +627,7 @@ Performs vector similarity search over all `READY` document chunks. Throttled to
 }
 ```
 
-#### 6. Ask Question (RAG with Citations)
+#### 7. Ask Question (RAG with Citations)
 `POST /query/ask`
 
 Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a grounded answer with inline citations, and caches the result in Redis. Throttled to **5 requests/minute**.
@@ -536,7 +660,7 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 
 ### Observability Endpoints
 
-#### 7. Prometheus Metrics
+#### 8. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -574,7 +698,7 @@ vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
 ```
 
-#### 8. Health Check
+#### 9. Health Check
 `GET /health`
 
 Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.
@@ -669,6 +793,8 @@ npm run lint
 
 | Test Suite | Path | Type | Key Verifications Covered |
 |:---|:---|:---|:---|
+| **File Text Extraction** | `src/documents/utils/file-extractor.util.spec.ts` | Unit | Text extraction from PDF (`pdf-parse`), DOCX (`mammoth`), and TXT; title sanitization, whitespace collapsing, corruption detection, empty buffer rejection. |
+| **Documents Controller** | `src/documents/documents.controller.spec.ts` | Unit | JSON document ingestion, multipart file uploads, custom title overrides, automatic sanitized filename fallback, missing file `400 Bad Request` exceptions. |
 | **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
 | **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
 | **Vector Search Service** | `src/query/query.service.spec.ts` | Unit | Cosine distance `<->` operator SQL formatting, vector parameter serialization (`[0.1, 0.2, ...]`), and limit boundaries. |
@@ -677,7 +803,7 @@ npm run lint
 | **Health Controller** | `src/health/health.controller.spec.ts` | Unit | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
 | **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
 | **Application Lifecycle E2E** | `test/app.e2e-spec.ts` | E2E | HTTP GET `/health`, `/metrics`, unhandled route 404 formatting, and global filter verification. |
-| **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | Full HTTP lifecycle for document ingestion, paginated document listing with metadata, and cascade deletion. |
+| **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | Full HTTP lifecycle for raw text ingestion, multipart file uploads (`.pdf`, `.docx`, `.txt`), paginated document listing with metadata, and cascade deletion. |
 
 > [!NOTE]
 > All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost.
@@ -688,56 +814,53 @@ npm run lint
 
 ### Prerequisites
 
-- **Node.js** (v20+ LTS)
-- **Docker** & **Docker Compose**
+- **Node.js** (v20+ LTS) or **Docker** & **Docker Compose**
 - **OpenAI API Key**
 
-### 1. Clone & Install Dependencies
+---
+
+### Option A: Run Full Stack with Docker Compose (Recommended)
+
+The easiest way to run DocMind in a production-identical environment:
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/mo74x/Docmind.git
 cd Docmind
-npm install
-```
 
-### 2. Configure Environment
-
-Copy the environment template and provide your OpenAI API key:
-
-```bash
+# 2. Configure environment variables
 cp .env.example .env
-```
+# Edit .env and supply your OPENAI_API_KEY
 
-Edit `.env`:
-```env
-OPENAI_API_KEY=sk-your-openai-api-key
-```
+# 3. Build & start all containers (API, PostgreSQL with pgvector, Redis)
+docker compose up --build -d
 
-### 3. Start Infrastructure
-
-Start PostgreSQL (with `pgvector`) and Redis containers:
-
-```bash
-docker compose up -d
-```
-
-### 4. Run Vector Migrations
-
-Initialize the `pgvector` extension, chunk vector column, and `ivfflat` index:
-
-```bash
+# 4. Run vector extension & index migration
 npx ts-node src/migrations/run-pgvector.ts
 ```
 
-### 5. Start Application
+---
+
+### Option B: Local Node.js Development
 
 ```bash
-# Development (with hot-reload)
-npm run start:dev
+# 1. Clone & Install Dependencies
+git clone https://github.com/mo74x/Docmind.git
+cd Docmind
+npm install
 
-# Production build
-npm run build
-npm run start:prod
+# 2. Configure Environment
+cp .env.example .env
+# Edit .env and supply your OPENAI_API_KEY
+
+# 3. Start Infrastructure Dependencies
+docker compose up -d postgres redis
+
+# 4. Run Vector Migrations
+npx ts-node src/migrations/run-pgvector.ts
+
+# 5. Start Application
+npm run start:dev
 ```
 
 ### Available Endpoints
@@ -751,17 +874,48 @@ npm run start:prod
 
 ---
 
+### Quick Testing (cURL Examples)
+
+```bash
+# 1. Upload a document file (PDF, DOCX, TXT)
+curl -X POST http://localhost:3000/documents/upload \
+  -H "x-api-key: your-secret-api-key" \
+  -F "file=@./whitepaper.pdf" \
+  -F "title=Whitepaper Architecture"
+
+# 2. Ingest raw text document
+curl -X POST http://localhost:3000/documents \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-secret-api-key" \
+  -d '{"title": "DocMind Architecture", "content": "DocMind is an asynchronous RAG backend built on NestJS..."}'
+
+# 3. Semantic vector search
+curl -X POST http://localhost:3000/query/search \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-secret-api-key" \
+  -d '{"query": "How does DocMind handle background processing?", "limit": 3}'
+
+# 4. Grounded RAG Q&A with citations
+curl -X POST http://localhost:3000/query/ask \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-secret-api-key" \
+  -d '{"query": "How does DocMind handle background processing?"}'
+```
+
+---
+
 ## Project Structure
 
 ```text
 docmind/
-├── docker-compose.yml              # PostgreSQL (pgvector) & Redis containers
+├── Dockerfile                      # Multi-stage production container build (Node 20 Alpine)
+├── docker-compose.yml              # PostgreSQL (pgvector), Redis & API container orchestration
 ├── .env.example                    # Environment configuration template
 ├── package.json
 ├── tsconfig.json
 ├── test/                           # E2E Test suites & configurations
 │   ├── app.e2e-spec.ts             # Health, metrics & filter E2E tests
-│   ├── documents.e2e-spec.ts       # Document ingestion, pagination & deletion E2E tests
+│   ├── documents.e2e-spec.ts       # Document ingestion, file upload, pagination & deletion E2E tests
 │   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
 ├── src/
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
@@ -796,12 +950,17 @@ docmind/
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
 │   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) column
-│   │   ├── documents.controller.ts # Ingestion, paginated listing, status & DELETE endpoints
+│   │   ├── documents.controller.ts # Ingestion, file upload, paginated listing, status & DELETE endpoints
+│   │   ├── documents.controller.spec.ts
 │   │   ├── documents.service.ts    # Document state management, queue producer & deletion
 │   │   ├── documents.service.spec.ts
 │   │   ├── documents.module.ts
-│   │   └── dto/
-│   │       └── ingest-document.dto.ts
+│   │   ├── dto/
+│   │   │   ├── ingest-document.dto.ts
+│   │   │   └── upload-document.dto.ts # Multipart file upload DTO & Swagger file schema
+│   │   └── utils/
+│   │       ├── file-extractor.util.ts      # PDF, DOCX & TXT text extraction & title sanitization
+│   │       └── file-extractor.util.spec.ts
 │   ├── ingestion/
 │   │   ├── ingestion.processor.ts  # BullMQ worker: chunking -> batch embedding -> DB
 │   │   ├── chunking.util.ts        # Boundary-aware text chunking logic
