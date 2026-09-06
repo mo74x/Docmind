@@ -11,6 +11,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)](https://openai.com)
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
 [![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
+[![CI/CD](https://github.com/mo74x/Docmind/actions/workflows/ci.yml/badge.svg)](https://github.com/mo74x/Docmind/actions/workflows/ci.yml)
 [![Unit Tests](https://img.shields.io/badge/Unit%20Tests-69%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![E2E Tests](https://img.shields.io/badge/E2E%20Tests-18%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
@@ -43,6 +44,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 - [Testing & Quality Assurance](#testing--quality-assurance)
   - [Running Tests](#running-tests)
   - [Test Suite Breakdown](#test-suite-breakdown)
+  - [CI/CD Pipeline (GitHub Actions)](#cicd-pipeline-github-actions)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
 
@@ -807,6 +809,42 @@ npm run lint
 
 > [!NOTE]
 > All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost.
+
+### CI/CD Pipeline (GitHub Actions)
+
+DocMind enforces automated quality gates on every commit and pull request to the `main` branch via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+The pipeline spins up native containerized services and runs nine sequential quality stages:
+
+```mermaid
+flowchart LR
+    A[Trigger: Push / PR] --> B[Spin up Services<br/>PostgreSQL 16 pgvector + Redis 7]
+    B --> C[Checkout & Setup Node.js 20]
+    C --> D[Install Deps: npm ci]
+    D --> E[Linting: npm run lint]
+    E --> F[Format Check: prettier --check .]
+    F --> G[Run pgvector Migrations]
+    G --> H[Unit & E2E Tests + Coverage]
+    H --> I[Application Build: npm run build]
+    I --> J[Docker Build Verification]
+```
+
+#### Pipeline Configuration & Stages
+
+| Stage | Command / Action | Description |
+|:---|:---|:---|
+| **Triggers** | `push: [main]`, `pull_request: [main]` | Runs automated checks on every commit or PR against the production branch. |
+| **Services** | `pgvector/pgvector:pg16`, `redis:7-alpine` | Containerized service containers with automated health checks (`pg_isready`, `redis-cli ping`). |
+| **1. Checkout** | `actions/checkout@v4` | Fetches codebase context into runner workspace. |
+| **2. Setup Node.js** | `actions/setup-node@v4` | Configures Node.js v20 LTS with automated `npm` dependency caching. |
+| **3. Install Deps** | `npm ci` | Deterministic, clean installation of exact package tree from `package-lock.json`. |
+| **4. Code Linting** | `npm run lint` | Validates TypeScript rules, naming conventions, and code hygiene via ESLint. |
+| **5. Format Check** | `npx prettier --check .` | Verifies consistent code style across the codebase according to `.prettierrc`. |
+| **6. DB Migrations** | `npx ts-node src/migrations/run-pgvector.ts` | Applies pgvector extension, chunks schema, and `ivfflat` index on PostgreSQL 16. |
+| **7. Tests & Coverage** | `npm run test:cov && npm run test:e2e` | Executes 100% of unit and end-to-end integration tests, generating coverage reports. |
+| **8. App Build** | `npm run build` | Compiles NestJS TypeScript into production-ready JavaScript bundle in `dist/`. |
+| **9. Docker Build** | `docker build -t docmind-test .` | Validates multi-stage Dockerfile build, asset bundling, and runner image creation. |
+| **Artifacts** | `actions/upload-artifact@v4` | Uploads HTML & LCOV coverage reports preserved for 14 days. |
 
 ---
 

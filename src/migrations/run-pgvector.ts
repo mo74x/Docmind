@@ -16,6 +16,17 @@ async function run() {
 
     await client.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
     console.log('Extension pgvector enabled.');
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chunks (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        "documentId" uuid NOT NULL,
+        "chunkIndex" integer NOT NULL,
+        content text NOT NULL,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT now()
+      );
+    `);
+
     await client.query(`
       ALTER TABLE chunks
       ADD COLUMN IF NOT EXISTS embedding vector(1536);
@@ -30,6 +41,7 @@ async function run() {
     console.log('Created ivfflat index.');
   } catch (error) {
     console.error('Migration failed:', error);
+    process.exit(1);
   } finally {
     await client.end();
   }

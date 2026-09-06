@@ -1,0 +1,106 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  quality-and-tests:
+    name: Build, Quality Gates & Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: docmind
+          POSTGRES_PASSWORD: docmind_password
+          POSTGRES_DB: docmind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docmind -d docmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      PORT: 3000
+      DATABASE_URL: postgresql://docmind:docmind_password@localhost:5432/docmind
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      API_KEY: ci-test-api-key-12345
+      OPENAI_API_KEY: sk-dummy-test-key-for-ci-pipeline
+      EMBEDDING_MODEL: text-embedding-3-small
+      EMBEDDING_DIMENSIONS: 1536
+      CHAT_MODEL: gpt-4o-mini
+      CHUNK_SIZE_CHARS: 1200
+      CHUNK_OVERLAP_CHARS: 200
+      RATE_LIMIT_TTL: 60000
+      RATE_LIMIT_MAX: 100
+
+    steps:
+      # 1. Checkout repository
+      - name: 1. Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Node.js v20 (with npm cache)
+      - name: 2. Setup Node.js v20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 3. Install dependencies
+      - name: 3. Install dependencies
+        run: npm ci
+
+      # 4. Code Linting
+      - name: 4. Code Linting
+        run: npm run lint
+
+      # 5. Formatting check
+      - name: 5. Formatting check
+        run: npx prettier --check .
+
+      # 6. Run pgvector migrations
+      - name: 6. Run pgvector migrations
+        run: npx ts-node src/migrations/run-pgvector.ts
+
+      # 7. Run unit & E2E tests with code coverage
+      - name: 7. Run unit & E2E tests with code coverage
+        run: |
+          npm run test:cov
+          npm run test:e2e
+
+      # 8. Application build verification
+      - name: 8. Application build verification
+        run: npm run build
+
+      # 9. Docker build verification
+      - name: 9. Docker build verification
+        run: docker build -t docmind-test .
+
+      # Optional: Upload Code Coverage Report
+      - name: Upload code coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
