@@ -5,10 +5,13 @@ import { BullModule } from '@nestjs/bullmq';
 import configuration from './config/configuration';
 import { Document } from './documents/document.entity';
 import { Chunk } from './documents/chunk.entity';
+import { ChatSession } from './chat/entities/chat-session.entity';
+import { ChatMessage } from './chat/entities/chat-message.entity';
 import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { DocumentsModule } from './documents/documents.module';
 import { QueryModule } from './query/query.module';
+import { ChatModule } from './chat/chat.module';
 import { RedisModule } from './redis/redis.module';
 import { ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
@@ -40,7 +43,7 @@ import { AppService } from './app.service';
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
         url: configService.get<string>('database.url'),
-        entities: [Document, Chunk],
+        entities: [Document, Chunk, ChatSession, ChatMessage],
         synchronize: true,
       }),
     }),
@@ -76,6 +79,7 @@ import { AppService } from './app.service';
     IngestionModule,
     DocumentsModule,
     QueryModule,
+    ChatModule,
     HealthModule,
     AuthModule,
   ],

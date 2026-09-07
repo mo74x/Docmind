@@ -12,8 +12,8 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
 [![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
 [![CI/CD](https://github.com/mo74x/Docmind/actions/workflows/ci.yml/badge.svg)](https://github.com/mo74x/Docmind/actions/workflows/ci.yml)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-91%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
-[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-26%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-111%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-34%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
@@ -34,6 +34,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [7. Production Docker & Container Orchestration](#7-production-docker--container-orchestration)
   - [8. Real-Time Ingestion Progress Streaming (SSE)](#8-real-time-ingestion-progress-streaming-sse)
   - [9. Real-Time RAG Answer Streaming (SSE)](#9-real-time-rag-answer-streaming-sse)
+  - [10. Multi-Turn Conversational Memory & Query Reformulation](#10-multi-turn-conversational-memory--query-reformulation)
 - [Observability & Monitoring](#observability--monitoring)
   - [Structured Logging (Winston)](#structured-logging-winston)
   - [Prometheus Metrics](#prometheus-metrics)
@@ -41,6 +42,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 - [API Reference](#api-reference)
   - [Documents Endpoints](#documents-endpoints)
   - [Query & Retrieval Endpoints](#query--retrieval-endpoints)
+  - [Chat & Conversational Memory Endpoints](#chat--conversational-memory-endpoints)
   - [Observability Endpoints](#observability-endpoints)
 - [Environment Configuration](#environment-configuration)
 - [Testing & Quality Assurance](#testing--quality-assurance)
@@ -72,6 +74,7 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 | **Retrieval** | Hybrid Search & RRF | Combines dense vector similarity (`<->`) with PostgreSQL full-text search (`tsvector` + `GIN`) via Reciprocal Rank Fusion ($k=60$) for optimal semantic and exact-keyword recall. |
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
 | **RAG** | Real-Time Answer Streaming | Token-by-token LLM answer streaming via Server-Sent Events (`GET /query/ask/stream` & `POST /query/ask/stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. |
+| **Memory** | Conversational Chat Sessions | Multi-turn chat persistence (`/chat/sessions`) with automatic query reformulation (resolves pronouns like "it", "this" via LLM contextualization before retrieval) and SSE token streaming. |
 | **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
 | **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
 | **DevOps** | Multi-Stage Docker | Hardened multi-stage `Dockerfile` (Node 20 Alpine, unprivileged `node` user) with `docker-compose.yml` orchestrating API, PostgreSQL (`pgvector`), and Redis with healthchecks. |
@@ -460,6 +463,41 @@ sequenceDiagram
 
 ---
 
+### 10. Multi-Turn Conversational Memory & Query Reformulation
+
+Traditional RAG systems fail when users ask follow-up questions referencing past context (e.g., *"What is its chunk size?"* after asking *"What is DocMind's ingestion pipeline?"*). DocMind addresses this with a dedicated chat session state machine and intelligent **Context Condensation**:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as User / Frontend
+    participant Chat as Chat Service
+    participant LLM as OpenAI (gpt-4o-mini)
+    participant Hybrid as Hybrid Search Engine
+    participant DB as PostgreSQL
+
+    Client->>Chat: POST /chat/sessions/:id/messages { "content": "What is its default overlap?" }
+    Chat->>DB: Fetch chronological conversation history
+    alt History Exists
+        Chat->>LLM: Reformulate question into standalone query<br/>("What is the default overlap in DocMind's chunker?")
+        LLM-->>Chat: Returns standalone search query
+    else First Message
+        Chat->>Chat: Use original query directly
+    end
+    Chat->>Hybrid: hybridSearch(standaloneQuery, limit, mode)
+    Hybrid-->>Chat: Return top-k chunks with RRF scores
+    Chat->>LLM: Generate answer using retrieved chunks + chat history
+    LLM-->>Chat: Synthesized response with [Source N] citations
+    Chat->>DB: Save user & assistant messages with citations
+    Chat-->>Client: Return response { userMessage, assistantMessage, sources, standaloneQuery }
+```
+
+- **Zero Lost Context**: Pronouns, elliptical queries, and follow-up clarifications are resolved into rich search terms before vector/lexical retrieval.
+- **Persistent Chat Sessions**: Full conversation history stored in PostgreSQL (`chat_sessions` and `chat_messages`) with cascade deletion on session removal.
+- **Live Conversational Streaming**: Live token-by-token streaming via `GET /chat/sessions/:id/messages/stream` and `POST /chat/sessions/:id/messages/stream` delivering immediate citations and continuous token emission.
+
+---
+
 ## Observability & Monitoring
 
 DocMind ships with production-grade observability built-in, requiring **zero external configuration** to start collecting metrics and structured logs.
@@ -529,6 +567,7 @@ rate(vector_search_latency_seconds_sum[5m]) / rate(vector_search_latency_seconds
 ```mermaid
 erDiagram
     Document ||--o{ Chunk : "contains"
+    ChatSession ||--o{ ChatMessage : "contains"
 
     Document {
         uuid id PK
@@ -546,6 +585,23 @@ erDiagram
         text content
         vector embedding "vector(1536)"
         tsvector tsv "GENERATED STORED"
+        datetime createdAt
+    }
+
+    ChatSession {
+        uuid id PK
+        string title
+        uuid workspaceId
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    ChatMessage {
+        uuid id PK
+        uuid sessionId FK
+        string role "user | assistant | system"
+        text content
+        jsonb sources
         datetime createdAt
     }
 ```
@@ -840,6 +896,187 @@ data: {"type":"done","isCached":false}
 
 ---
 
+### Chat & Conversational Memory Endpoints
+
+#### 10. Create Chat Session
+`POST /chat/sessions`
+
+Creates a new multi-turn conversation session.
+
+**Request Body**
+```json
+{
+  "title": "DocMind Architecture Discussion",
+  "workspaceId": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+}
+```
+
+**Response (`201 Created`)**
+```json
+{
+  "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+  "title": "DocMind Architecture Discussion",
+  "workspaceId": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+  "createdAt": "2026-09-07T10:00:00.000Z",
+  "updatedAt": "2026-09-07T10:00:00.000Z"
+}
+```
+
+#### 11. List Chat Sessions
+`GET /chat/sessions?page=1&limit=10&order=DESC`
+
+Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt`).
+
+**Response (`200 OK`)**
+```json
+{
+  "data": [
+    {
+      "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "title": "DocMind Architecture Discussion",
+      "createdAt": "2026-09-07T10:00:00.000Z",
+      "updatedAt": "2026-09-07T10:05:00.000Z"
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 10,
+    "totalItems": 1,
+    "totalPages": 1,
+    "hasNextPage": false,
+    "hasPreviousPage": false
+  }
+}
+```
+
+#### 12. Get Chat Session with Messages
+`GET /chat/sessions/:id`
+
+Retrieves the session metadata along with its full chronological message history (`createdAt ASC`).
+
+**Response (`200 OK`)**
+```json
+{
+  "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+  "title": "DocMind Architecture Discussion",
+  "createdAt": "2026-09-07T10:00:00.000Z",
+  "updatedAt": "2026-09-07T10:05:00.000Z",
+  "messages": [
+    {
+      "id": "11111111-2222-3333-4444-555555555555",
+      "sessionId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "role": "user",
+      "content": "What is DocMind's chunking strategy?",
+      "createdAt": "2026-09-07T10:01:00.000Z"
+    },
+    {
+      "id": "22222222-3333-4444-5555-666666666666",
+      "sessionId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "role": "assistant",
+      "content": "DocMind uses boundary-aware splitting with character overlap [Source 1].",
+      "sources": [
+        {
+          "citation": "[Source 1]",
+          "documentTitle": "Chunking Spec",
+          "chunkId": "f9e2b10a-3c4d-4e5f-9a8b-1c2d3e4f5a6b",
+          "similarity": 0.932
+        }
+      ],
+      "createdAt": "2026-09-07T10:01:02.000Z"
+    }
+  ]
+}
+```
+
+#### 13. Send Message (Multi-Turn Conversational RAG)
+`POST /chat/sessions/:id/messages`
+
+Sends a user message into a chat session. The backend automatically condenses previous message turns into a standalone query via OpenAI, retrieves grounded context using Hybrid Search (RRF), synthesizes the assistant response with inline citations, and persists both turns into PostgreSQL.
+
+**Request Body**
+```json
+{
+  "content": "What is its default overlap size?",
+  "mode": "hybrid",
+  "limit": 3
+}
+```
+
+**Response (`200 OK`)**
+```json
+{
+  "sessionId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+  "standaloneQuery": "What is the default overlap size for the DocMind chunker?",
+  "userMessage": {
+    "id": "33333333-4444-5555-6666-777777777777",
+    "sessionId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+    "role": "user",
+    "content": "What is its default overlap size?",
+    "createdAt": "2026-09-07T10:05:00.000Z"
+  },
+  "assistantMessage": {
+    "id": "44444444-5555-6666-7777-888888888888",
+    "sessionId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+    "role": "assistant",
+    "content": "The default overlap size is 200 characters [Source 1].",
+    "sources": [
+      {
+        "citation": "[Source 1]",
+        "documentTitle": "Chunking Spec",
+        "chunkId": "f9e2b10a-3c4d-4e5f-9a8b-1c2d3e4f5a6b",
+        "similarity": 0.941
+      }
+    ],
+    "createdAt": "2026-09-07T10:05:03.000Z"
+  },
+  "sources": [
+    {
+      "citation": "[Source 1]",
+      "documentTitle": "Chunking Spec",
+      "chunkId": "f9e2b10a-3c4d-4e5f-9a8b-1c2d3e4f5a6b",
+      "similarity": 0.941
+    }
+  ]
+}
+```
+
+#### 14. Stream Conversational Message (SSE)
+`GET /chat/sessions/:id/messages/stream?content=...&mode=hybrid`  
+`POST /chat/sessions/:id/messages/stream`
+
+Streams the conversational RAG reply token-by-token using Server-Sent Events (`text/event-stream`). Immediately emits `sources` (including the reformulated `standaloneQuery`), followed by incremental `token` deltas, and ends with a `done` event upon saving to the database.
+
+**cURL Example (GET)**
+```bash
+curl -N -H "Accept: text/event-stream" \
+  -H "x-api-key: your-secret-api-key" \
+  "http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream?content=What%20is%20its%20default%20overlap%20size%3F"
+```
+
+**cURL Example (POST)**
+```bash
+curl -N -X POST http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -H "x-api-key: your-secret-api-key" \
+  -d '{"content": "What is its default overlap size?", "mode": "hybrid", "limit": 3}'
+```
+
+#### 15. Delete Chat Session
+`DELETE /chat/sessions/:id`
+
+Deletes the session and cascade deletes all contained messages.
+
+**Response (`200 OK`)**
+```json
+{
+  "message": "Chat session deleted successfully",
+  "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242"
+}
+```
+
+---
+
 ### Observability Endpoints
 
 #### 10. Prometheus Metrics
@@ -984,6 +1221,8 @@ npm run lint
 | **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | 6 | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
 | **RAG Answer Streaming** | `src/query/answer-stream.spec.ts` | Unit | 5 | Token-by-token streaming, incremental delta emission, cache hits without LLM invocation, fallback handling on empty vector results, client unsubscribe abort cleanup, and error propagation. |
 | **Hybrid & Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 6 | Dense vector cosine similarity (`<->`), full-text search (`ts_rank_cd`), and hybrid CTE query with Reciprocal Rank Fusion (RRF). |
+| **Chat Service (Conversational Memory)** | `src/chat/chat.service.spec.ts` | Unit | 13 | Multi-turn session creation, pagination, query reformulation via LLM, hybrid retrieval integration, message persistence, and token-by-token SSE streaming. |
+| **Chat Controller** | `src/chat/chat.controller.spec.ts` | Unit | 7 | Controller routing, UUID parameters, HTTP status codes, message sending, and GET/POST SSE streaming subscriptions. |
 | **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | 10 | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
 | **Health Controller** | `src/health/health.controller.spec.ts` | Unit | 5 | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
 | **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | 6 | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
@@ -991,9 +1230,10 @@ npm run lint
 | **Application Lifecycle E2E** | `test/app.e2e-spec.ts` | E2E | 2 | HTTP GET `/health`, `/metrics`, unhandled route 404 formatting, and global filter verification. |
 | **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | 19 | Full HTTP lifecycle for raw text ingestion, multipart file uploads (`.pdf`, `.docx`, `.txt`), paginated document listing with metadata, cascade deletion, and live SSE progress streaming (`text/event-stream`). |
 | **RAG Streaming E2E** | `test/query-stream.e2e-spec.ts` | E2E | 5 | Full HTTP lifecycle for `GET /query/ask/stream` and `POST /query/ask/stream`, verifying `text/event-stream` headers, typed event emission sequence (`sources`, `token`, `done`), parameter validation, and error filters. |
+| **Chat & Memory E2E** | `test/chat.e2e-spec.ts` | E2E | 8 | Full HTTP lifecycle for chat session CRUD, multi-turn messages with query contextualization, parameter validation, and live SSE conversational streaming. |
 
 > [!NOTE]
-> All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost.
+> All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost. Total: **111 unit tests** + **34 E2E tests** = **145 passing tests**.
 
 ### CI/CD Pipeline (GitHub Actions)
 
@@ -1154,12 +1394,13 @@ docmind/
 ├── .prettierrc                     # Prettier styling standards
 ├── package.json
 ├── tsconfig.json
-├── test/                           # E2E Test suites & configurations (26 tests)
+├── test/                           # E2E Test suites & configurations (34 tests)
 │   ├── app.e2e-spec.ts             # Health, metrics & filter E2E tests
 │   ├── documents.e2e-spec.ts       # Text ingestion, file upload, pagination, deletion & SSE E2E tests
 │   ├── query-stream.e2e-spec.ts    # Token-by-token SSE streaming RAG Q&A E2E tests
+│   ├── chat.e2e-spec.ts            # Conversational memory, multi-turn RAG & SSE streaming E2E tests
 │   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
-├── src/                            # Application source & unit tests (91 tests)
+├── src/                            # Application source & unit tests (111 tests)
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
 │   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
 │   ├── __mocks__/                  # Pure ESM module mappings for high-speed isolated testing
@@ -1189,7 +1430,8 @@ docmind/
 │   │   └── health.module.ts
 │   ├── migrations/
 │   │   ├── run-pgvector.ts         # pgvector extension, ivfflat index & tsvector migration
-│   │   └── run-hybrid-migration.ts # Full-text search tsvector generated column & GIN index migration
+│   │   ├── run-hybrid-migration.ts # Full-text search tsvector generated column & GIN index migration
+│   │   └── run-chat-migration.ts   # Chat sessions and messages tables and index migration
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
 │   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) and tsvector columns
@@ -1225,6 +1467,19 @@ docmind/
 │   │   ├── query.module.ts         # Prometheus metric providers (counters & histograms)
 │   │   └── dto/
 │   │       └── search-query.dto.ts # Query validation DTO with retrieval mode & Type transformation
+│   ├── chat/
+│   │   ├── chat.controller.ts      # Multi-turn chat sessions & conversational SSE endpoints
+│   │   ├── chat.controller.spec.ts # Controller unit tests (100% path coverage)
+│   │   ├── chat.service.ts         # Session lifecycle, query reformulation & conversational RAG pipeline
+│   │   ├── chat.service.spec.ts    # Service unit tests (100% path coverage)
+│   │   ├── chat.module.ts          # Chat module registering TypeORM entities and QueryModule
+│   │   ├── entities/
+│   │   │   ├── chat-session.entity.ts # Chat session entity (UUID, title, workspaceId, timestamps)
+│   │   │   └── chat-message.entity.ts # Chat message entity (role, content, citations, FK cascade)
+│   │   └── dto/
+│   │       ├── create-chat-session.dto.ts
+│   │       ├── send-message.dto.ts
+│   │       └── stream-message-query.dto.ts
 │   └── redis/
 │       └── redis.module.ts         # Global Redis client provider
 ```
