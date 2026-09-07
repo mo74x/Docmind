@@ -12,7 +12,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
 [![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
 [![CI/CD](https://github.com/mo74x/Docmind/actions/workflows/ci.yml/badge.svg)](https://github.com/mo74x/Docmind/actions/workflows/ci.yml)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-89%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-91%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![E2E Tests](https://img.shields.io/badge/E2E%20Tests-26%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
@@ -69,6 +69,7 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 | **Documents** | Scalable Pagination | TypeORM `findAndCount` pagination supporting `page`, `limit` (1-100), and `order` (`ASC`/`DESC`), with automatic cascade deletion of chunks on document removal. |
 | **Chunking** | Context-Preserving | Boundary-aware splitting prioritizes word structures with sliding window overlaps to prevent semantic cutoff. |
 | **Vector DB** | Native PostgreSQL | Utilizes PostgreSQL with `pgvector` and an `ivfflat` cosine similarity index for fast vector search without external vector DB overhead. |
+| **Retrieval** | Hybrid Search & RRF | Combines dense vector similarity (`<->`) with PostgreSQL full-text search (`tsvector` + `GIN`) via Reciprocal Rank Fusion ($k=60$) for optimal semantic and exact-keyword recall. |
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
 | **RAG** | Real-Time Answer Streaming | Token-by-token LLM answer streaming via Server-Sent Events (`GET /query/ask/stream` & `POST /query/ask/stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. |
 | **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
@@ -544,18 +545,24 @@ erDiagram
         int chunkIndex
         text content
         vector embedding "vector(1536)"
+        tsvector tsv "GENERATED STORED"
         datetime createdAt
     }
 ```
 
-### Vector Index Configuration
+### Vector & Full-Text Search Index Configuration
 
-Vector similarity lookups use an `ivfflat` index configured with cosine distance operations (`vector_cosine_ops`):
+- **Dense Vector Index**: Uses PostgreSQL `ivfflat` index configured with cosine distance operations (`vector_cosine_ops`):
+  ```sql
+  CREATE INDEX IF NOT EXISTS chunks_embedding_idx 
+  ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+  ```
 
-```sql
-CREATE INDEX IF NOT EXISTS chunks_embedding_idx 
-ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-```
+- **Full-Text Lexical Index**: Uses a PostgreSQL `GIN` inverted index over the generated `tsvector` column for ultra-fast keyword retrieval:
+  ```sql
+  CREATE INDEX IF NOT EXISTS chunks_tsv_idx 
+  ON chunks USING gin(tsv);
+  ```
 
 ---
 
@@ -719,18 +726,25 @@ data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"READY","per
 
 ### Query & Retrieval Endpoints
 
-#### 7. Semantic Vector Search
+#### 7. Semantic Vector & Hybrid Search
 `POST /query/search`
 
-Performs vector similarity search over all `READY` document chunks. Throttled to **20 requests/minute**.
+Retrieves relevant document chunks using dense vector similarity (`<->`), full-text lexical search (`tsvector`), or **Reciprocal Rank Fusion (RRF)** hybrid retrieval. Throttled to **20 requests/minute**.
 
 **Request Body**
 ```json
 {
   "query": "How does DocMind handle background processing?",
-  "limit": 3
+  "limit": 3,
+  "mode": "hybrid"
 }
 ```
+
+| Parameter | Type | Default | Description |
+|:---|:---|:---|:---|
+| `query` | string | — | Search query or question (**Required**) |
+| `limit` | number | `5` | Number of matching chunks to return (1-20) |
+| `mode` | string | `hybrid` | Retrieval strategy: `hybrid` (RRF fusion), `vector` (dense embeddings), or `fts` (exact lexical keyword) |
 
 **Response (`200 OK`)**
 ```json
@@ -741,13 +755,18 @@ Performs vector similarity search over all `READY` document chunks. Throttled to
     {
       "chunkId": "f9e2b10a-3c4d-4e5f-9a8b-1c2d3e4f5a6b",
       "content": "DocMind uses BullMQ backed by Redis for background processing...",
-      "similarity": 0.8924,
+      "similarity": 0.0328,
       "documentTitle": "DocMind Architecture Overview",
       "documentId": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b"
     }
   ]
 }
 ```
+
+> [!TIP]
+> In `hybrid` mode, rankings are computed using Reciprocal Rank Fusion ($k=60$):  
+> $\text{RRF Score} = \frac{1}{60 + \text{rank}_{\text{dense}}} + \frac{1}{60 + \text{rank}_{\text{fts}}}$  
+> This balances deep conceptual semantic matches with exact keyword recall (acronyms, IDs, and error codes).
 
 #### 8. Ask Question (RAG with Citations)
 `POST /query/ask`
@@ -964,7 +983,7 @@ npm run lint
 | **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | 14 | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
 | **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | 6 | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
 | **RAG Answer Streaming** | `src/query/answer-stream.spec.ts` | Unit | 5 | Token-by-token streaming, incremental delta emission, cache hits without LLM invocation, fallback handling on empty vector results, client unsubscribe abort cleanup, and error propagation. |
-| **Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 4 | Cosine distance `<->` operator SQL formatting, vector parameter serialization (`[0.1, 0.2, ...]`), and limit boundaries. |
+| **Hybrid & Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 6 | Dense vector cosine similarity (`<->`), full-text search (`ts_rank_cd`), and hybrid CTE query with Reciprocal Rank Fusion (RRF). |
 | **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | 10 | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
 | **Health Controller** | `src/health/health.controller.spec.ts` | Unit | 5 | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
 | **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | 6 | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
@@ -1039,8 +1058,9 @@ cp .env.example .env
 # 3. Build & start all containers (API, PostgreSQL with pgvector, Redis)
 docker compose up --build -d
 
-# 4. Run vector extension & index migration
+# 4. Run vector extension & hybrid search index migrations
 npx ts-node src/migrations/run-pgvector.ts
+npx ts-node src/migrations/run-hybrid-migration.ts
 ```
 
 ---
@@ -1060,8 +1080,9 @@ cp .env.example .env
 # 3. Start Infrastructure Dependencies
 docker compose up -d postgres redis
 
-# 4. Run Vector Migrations
+# 4. Run Vector & Hybrid Search Migrations
 npx ts-node src/migrations/run-pgvector.ts
+npx ts-node src/migrations/run-hybrid-migration.ts
 
 # 5. Start Application
 npm run start:dev
@@ -1099,11 +1120,11 @@ curl -N -H "Accept: text/event-stream" \
   -H "x-api-key: your-secret-api-key" \
   http://localhost:3000/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b/progress
 
-# 4. Semantic vector search
+# 4. Hybrid vector & full-text search with RRF scoring
 curl -X POST http://localhost:3000/query/search \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-secret-api-key" \
-  -d '{"query": "How does DocMind handle background processing?", "limit": 3}'
+  -d '{"query": "How does DocMind handle background processing?", "limit": 3, "mode": "hybrid"}'
 
 # 5. Grounded RAG Q&A with citations (Synchronous)
 curl -X POST http://localhost:3000/query/ask \
@@ -1138,7 +1159,7 @@ docmind/
 │   ├── documents.e2e-spec.ts       # Text ingestion, file upload, pagination, deletion & SSE E2E tests
 │   ├── query-stream.e2e-spec.ts    # Token-by-token SSE streaming RAG Q&A E2E tests
 │   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
-├── src/                            # Application source & unit tests (89 tests)
+├── src/                            # Application source & unit tests (91 tests)
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
 │   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
 │   ├── __mocks__/                  # Pure ESM module mappings for high-speed isolated testing
@@ -1167,10 +1188,11 @@ docmind/
 │   │   ├── health.controller.spec.ts
 │   │   └── health.module.ts
 │   ├── migrations/
-│   │   └── run-pgvector.ts         # pgvector extension & ivfflat index migration
+│   │   ├── run-pgvector.ts         # pgvector extension, ivfflat index & tsvector migration
+│   │   └── run-hybrid-migration.ts # Full-text search tsvector generated column & GIN index migration
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
-│   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) column
+│   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) and tsvector columns
 │   │   ├── documents.controller.ts # Ingestion, file upload, pagination, status, DELETE & SSE endpoints
 │   │   ├── documents.controller.spec.ts
 │   │   ├── documents.service.ts    # Document state management, queue producer, SSE stream & deletion
@@ -1195,14 +1217,14 @@ docmind/
 │   │   └── embeddings.module.ts
 │   ├── query/
 │   │   ├── query.controller.ts     # Semantic search, Q&A, and SSE streaming endpoints with rate limits
-│   │   ├── query.service.ts        # Vector similarity search over pgvector
+│   │   ├── query.service.ts        # Hybrid (RRF), vector (<->), and full-text search engine
 │   │   ├── query.service.spec.ts
 │   │   ├── answer.service.ts       # RAG answer synthesis, Redis caching & Prometheus instrumentation
 │   │   ├── answer.service.spec.ts
 │   │   ├── answer-stream.spec.ts   # Token-by-token SSE streaming unit tests
 │   │   ├── query.module.ts         # Prometheus metric providers (counters & histograms)
 │   │   └── dto/
-│   │       └── search-query.dto.ts # Query validation DTO with Type number transformation
+│   │       └── search-query.dto.ts # Query validation DTO with retrieval mode & Type transformation
 │   └── redis/
 │       └── redis.module.ts         # Global Redis client provider
 ```

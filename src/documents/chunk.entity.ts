@@ -19,6 +19,15 @@ export class Chunk {
   @Column({ type: 'text' })
   content: string;
 
+  @Column({
+    type: 'tsvector',
+    select: false,
+    nullable: true,
+    insert: false,
+    update: false,
+  })
+  tsv: string;
+
   @CreateDateColumn()
   createdAt: Date;
 }

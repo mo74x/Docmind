@@ -19,7 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "format:check": "prettier --check .",
-    "migration:run": "ts-node src/migrations/run-pgvector.ts"
+    "migration:run": "ts-node src/migrations/run-pgvector.ts",
+    "migration:hybrid": "ts-node src/migrations/run-hybrid-migration.ts"
   },
   "dependencies": {
     "@nest-lab/throttler-storage-redis": "^1.1.0",

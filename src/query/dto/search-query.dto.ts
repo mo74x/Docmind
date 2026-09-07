@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsIn,
   Max,
   Min,
 } from 'class-validator';
@@ -30,4 +31,14 @@ export class SearchQueryDto {
   @Min(1)
   @Max(20)
   limit?: number = 5;
+
+  @ApiPropertyOptional({
+    description:
+      'Retrieval mode: dense vector similarity, full-text lexical search (BM25), or hybrid RRF fusion',
+    enum: ['vector', 'fts', 'hybrid'],
+    default: 'hybrid',
+  })
+  @IsOptional()
+  @IsIn(['vector', 'fts', 'hybrid'])
+  mode?: 'vector' | 'fts' | 'hybrid' = 'hybrid';
 }

@@ -4,6 +4,7 @@
 import { Client } from 'pg';
 import { config } from 'dotenv';
 config();
+
 async function run() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -12,33 +13,7 @@ async function run() {
   const client = new Client({ connectionString });
   try {
     await client.connect();
-    console.log('Connected to DB');
-
-    await client.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
-    console.log('Extension pgvector enabled.');
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS chunks (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        "documentId" uuid NOT NULL,
-        "chunkIndex" integer NOT NULL,
-        content text NOT NULL,
-        "createdAt" TIMESTAMP NOT NULL DEFAULT now()
-      );
-    `);
-
-    await client.query(`
-      ALTER TABLE chunks
-      ADD COLUMN IF NOT EXISTS embedding vector(1536);
-    `);
-    console.log('Added embedding vector column.');
-
-    // Create the ivfflat index for fast cosine-similarity search
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS chunks_embedding_idx 
-      ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-    `);
-    console.log('Created ivfflat index.');
+    console.log('Connected to DB for Hybrid Search migration');
 
     // Add generated tsvector column for full-text lexical search
     await client.query(`
@@ -55,14 +30,14 @@ async function run() {
     `);
     console.log('Added tsv generated column.');
 
-    // Create GIN index for full-text search
+    // Create GIN index for ultra-fast full-text search
     await client.query(`
       CREATE INDEX IF NOT EXISTS chunks_tsv_idx 
       ON chunks USING gin(tsv);
     `);
     console.log('Created GIN index chunks_tsv_idx.');
   } catch (error) {
-    console.error('Migration failed:', error);
+    console.error('Hybrid migration failed:', error);
     process.exit(1);
   } finally {
     await client.end();

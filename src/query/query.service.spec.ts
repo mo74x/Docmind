@@ -36,24 +36,24 @@ describe('QueryService', () => {
     jest.clearAllMocks();
   });
 
-  describe('search', () => {
-    it('should format query embeddings into pgvector format and execute raw SQL with cosine distance operator', async () => {
+  describe('hybridSearch (Default Search Mode)', () => {
+    it('should execute CTE combining vector search and FTS with Reciprocal Rank Fusion (RRF)', async () => {
       const mockVector = [0.123, -0.456, 0.789, 0.0];
       embeddingsServiceMock.embedBatch.mockResolvedValue([mockVector]);
 
       const mockResults: SearchResult[] = [
         {
           chunkId: 'chunk-1',
-          content: 'Relevant content snippet 1',
-          similarity: 0.92,
-          documentTitle: 'System Design Doc',
+          content: 'DocMind hybrid retrieval combines dense and lexical search',
+          similarity: 0.0327, // RRF score
+          documentTitle: 'Architecture Overview',
           documentId: 'doc-1',
         },
       ];
       dataSourceMock.query.mockResolvedValue(mockResults);
 
       const dto: SearchQueryDto = {
-        query: 'What is the system architecture?',
+        query: 'What is hybrid search?',
         limit: 3,
       };
 
@@ -70,47 +70,133 @@ describe('QueryService', () => {
         unknown[],
       ];
 
-      // Verifies cosine distance operator <-> and READY status filter in query
+      // Verify CTE vector_matches and fts_matches
+      expect(sqlQuery).toContain('WITH vector_matches AS');
       expect(sqlQuery).toContain('c.embedding <-> $1');
-      expect(sqlQuery).toContain("WHERE d.status = 'READY'");
-      expect(sqlQuery).toContain('ORDER BY c.embedding <-> $1');
-      expect(sqlQuery).toContain('LIMIT $2');
+      expect(sqlQuery).toContain('fts_matches AS');
+      expect(sqlQuery).toContain("plainto_tsquery('english', $2)");
+      expect(sqlQuery).toContain('FULL OUTER JOIN fts_matches');
+      expect(sqlQuery).toContain('1.0 / (60 + v.rank_dense)');
+      expect(sqlQuery).toContain('1.0 / (60 + f.rank_fts)');
+      expect(sqlQuery).toContain('LIMIT $3');
 
-      // Verifies pgvector format [0.123,-0.456,0.789,0]
+      // Verify SQL params: [$1 pgVector, $2 query string, $3 limit]
       const expectedPgVector = `[${mockVector.join(',')}]`;
-      expect(sqlParams).toEqual([expectedPgVector, 3]);
+      expect(sqlParams).toEqual([expectedPgVector, dto.query, 3]);
 
       expect(results).toEqual(mockResults);
     });
 
-    it('should apply default limit of 5 when limit is not specified', async () => {
-      const mockVector = [0.1, 0.2, 0.3];
-      embeddingsServiceMock.embedBatch.mockResolvedValue([mockVector]);
+    it('should apply default limit of 5 when limit is not provided in hybrid search', async () => {
+      embeddingsServiceMock.embedBatch.mockResolvedValue([[0.1, 0.2]]);
       dataSourceMock.query.mockResolvedValue([]);
 
       const dto: SearchQueryDto = {
-        query: 'test query without limit',
+        query: 'unlimited query',
       };
 
-      const results = await service.search(dto);
+      await service.search(dto);
 
-      expect(dataSourceMock.query).toHaveBeenCalledTimes(1);
       const [, sqlParams] = dataSourceMock.query.mock.calls[0] as [
         string,
         unknown[],
       ];
-      expect(sqlParams[1]).toBe(5);
-      expect(results).toEqual([]);
+      expect(sqlParams[2]).toBe(5);
     });
+  });
 
-    it('should correctly format multi-dimensional and negative embeddings', async () => {
+  describe('vectorSearch (mode: vector)', () => {
+    it('should execute pure dense vector search using cosine distance operator', async () => {
+      const mockVector = [0.5, -0.5, 0.25];
+      embeddingsServiceMock.embedBatch.mockResolvedValue([mockVector]);
+
+      const mockResults: SearchResult[] = [
+        {
+          chunkId: 'chunk-vector',
+          content: 'Dense vector content',
+          similarity: 0.94,
+          documentTitle: 'Vector Guide',
+          documentId: 'doc-v',
+        },
+      ];
+      dataSourceMock.query.mockResolvedValue(mockResults);
+
+      const dto: SearchQueryDto = {
+        query: 'dense vector query',
+        limit: 10,
+        mode: 'vector',
+      };
+
+      const results = await service.search(dto);
+
+      expect(embeddingsServiceMock.embedBatch).toHaveBeenCalledTimes(1);
+      expect(dataSourceMock.query).toHaveBeenCalledTimes(1);
+
+      const [sqlQuery, sqlParams] = dataSourceMock.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
+
+      expect(sqlQuery).toContain('1 - (c.embedding <-> $1) AS similarity');
+      expect(sqlQuery).toContain('ORDER BY c.embedding <-> $1');
+      expect(sqlQuery).toContain('LIMIT $2');
+      expect(sqlParams).toEqual([`[${mockVector.join(',')}]`, 10]);
+      expect(results).toEqual(mockResults);
+    });
+  });
+
+  describe('ftsSearch (mode: fts)', () => {
+    it('should execute pure full-text search without generating embeddings', async () => {
+      const mockResults: SearchResult[] = [
+        {
+          chunkId: 'chunk-fts',
+          content:
+            'Lexical exact keyword match for error ERR_CONNECTION_REFUSED',
+          similarity: 0.85,
+          documentTitle: 'Troubleshooting Guide',
+          documentId: 'doc-fts',
+        },
+      ];
+      dataSourceMock.query.mockResolvedValue(mockResults);
+
+      const dto: SearchQueryDto = {
+        query: 'ERR_CONNECTION_REFUSED',
+        limit: 4,
+        mode: 'fts',
+      };
+
+      const results = await service.search(dto);
+
+      // Embedding service should NOT be called for pure FTS
+      expect(embeddingsServiceMock.embedBatch).not.toHaveBeenCalled();
+      expect(dataSourceMock.query).toHaveBeenCalledTimes(1);
+
+      const [sqlQuery, sqlParams] = dataSourceMock.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
+
+      expect(sqlQuery).toContain(
+        "ts_rank_cd(c.tsv, plainto_tsquery('english', $1))::float AS similarity",
+      );
+      expect(sqlQuery).toContain("c.tsv @@ plainto_tsquery('english', $1)");
+      expect(sqlQuery).toContain('ORDER BY similarity DESC');
+      expect(sqlQuery).toContain('LIMIT $2');
+      expect(sqlParams).toEqual([dto.query, 4]);
+      expect(results).toEqual(mockResults);
+    });
+  });
+
+  describe('Edge cases', () => {
+    it('should correctly format negative and high-precision embeddings', async () => {
       const mockVector = [-0.012345, 0.987654, -1.0, 0.5555];
       embeddingsServiceMock.embedBatch.mockResolvedValue([mockVector]);
       dataSourceMock.query.mockResolvedValue([]);
 
       const dto: SearchQueryDto = {
-        query: 'negative embeddings test',
+        query: 'precision test',
         limit: 10,
+        mode: 'hybrid',
       };
 
       await service.search(dto);
@@ -120,7 +206,8 @@ describe('QueryService', () => {
         unknown[],
       ];
       expect(sqlParams[0]).toBe('[-0.012345,0.987654,-1,0.5555]');
-      expect(sqlParams[1]).toBe(10);
+      expect(sqlParams[1]).toBe(dto.query);
+      expect(sqlParams[2]).toBe(10);
     });
 
     it('should return empty array when no matching documents are found', async () => {
