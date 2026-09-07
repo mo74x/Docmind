@@ -1,9 +1,21 @@
-import { Controller, Post, Body } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import {
+  Controller,
+  Post,
+  Body,
+  Query,
+  Sse,
+  Res,
+  UseGuards,
+  MessageEvent,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Observable } from 'rxjs';
+import type { Response } from 'express';
 import { QueryService } from './query.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { AnswerService } from './answer.service';
-import { UseGuards } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
 @ApiTags('Query & Retrieval')
@@ -14,8 +26,10 @@ export class QueryController {
     private readonly queryService: QueryService,
     private readonly answerService: AnswerService,
   ) {}
+
   @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Post('search')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Search the knowledge base using semantic vector similarity',
   })
@@ -31,8 +45,10 @@ export class QueryController {
       results,
     };
   }
+
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('ask')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Ask a question and get an AI-generated answer with citations',
   })
@@ -42,5 +58,72 @@ export class QueryController {
   })
   async ask(@Body() dto: SearchQueryDto) {
     return this.answerService.askQuestion(dto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Sse('ask/stream')
+  @ApiOperation({
+    summary: 'Stream RAG answer token-by-token via SSE (GET)',
+  })
+  @ApiQuery({
+    name: 'query',
+    required: true,
+    type: String,
+    description: 'The question to ask the knowledge base',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Number of matching chunks to return',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'SSE stream delivering citations, incremental tokens, and completion event',
+  })
+  askStream(@Query() dto: SearchQueryDto): Observable<MessageEvent> {
+    return this.answerService.askQuestionStream(dto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('ask/stream')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Stream RAG answer token-by-token via SSE (POST body)',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'SSE stream delivering citations, incremental tokens, and completion event',
+  })
+  askStreamPost(@Body() dto: SearchQueryDto, @Res() res: Response): void {
+    res.status(HttpStatus.OK);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+
+    const subscription = this.answerService.askQuestionStream(dto).subscribe({
+      next: (event) => {
+        res.write(`data: ${JSON.stringify(event.data)}\n\n`);
+      },
+      error: (err: unknown) => {
+        const errorMsg =
+          err instanceof Error
+            ? err.message
+            : 'Internal error during streaming';
+        res.write(
+          `data: ${JSON.stringify({ type: 'error', error: errorMsg })}\n\n`,
+        );
+        res.end();
+      },
+      complete: () => {
+        res.end();
+      },
+    });
+
+    res.on('close', () => {
+      subscription.unsubscribe();
+    });
   }
 }

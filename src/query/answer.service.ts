@@ -1,8 +1,9 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger, Inject, MessageEvent } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import Redis from 'ioredis';
 import * as crypto from 'crypto';
+import { Observable } from 'rxjs';
 import { QueryService } from './query.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
@@ -21,6 +22,24 @@ export interface AnswerResponse {
   sources: AnswerSource[];
   isCached?: boolean;
 }
+
+export interface StreamSourcesEvent {
+  type: 'sources';
+  data: AnswerSource[];
+}
+
+export interface StreamTokenEvent {
+  type: 'token';
+  content: string;
+}
+
+export interface StreamDoneEvent {
+  type: 'done';
+  isCached: boolean;
+}
+
+export type StreamEventData =
+  StreamSourcesEvent | StreamTokenEvent | StreamDoneEvent;
 
 @Injectable()
 export class AnswerService {
@@ -117,6 +136,174 @@ export class AnswerService {
     );
 
     return finalResult;
+  }
+
+  /**
+   * Stream RAG answer token-by-token via Server-Sent Events (SSE).
+   */
+  askQuestionStream(dto: SearchQueryDto): Observable<MessageEvent> {
+    return new Observable<MessageEvent>((subscriber) => {
+      let isAborted = false;
+
+      const runPipeline = async () => {
+        this.queriesCounter.inc();
+        const cacheKey = this.generateCacheKey(dto.query);
+        const cachedResponse = await this.redis.get(cacheKey);
+
+        if (cachedResponse) {
+          this.logger.log(`Cache HIT (stream) for query: "${dto.query}"`);
+          this.cacheHitsCounter.inc();
+          const parsed = JSON.parse(cachedResponse) as AnswerResponse;
+
+          subscriber.next({
+            data: {
+              type: 'sources',
+              data: parsed.sources,
+            },
+          });
+
+          subscriber.next({
+            data: {
+              type: 'token',
+              content: parsed.answer || '',
+            },
+          });
+
+          subscriber.next({
+            data: {
+              type: 'done',
+              isCached: true,
+            },
+          });
+
+          subscriber.complete();
+          return;
+        }
+
+        this.logger.log(
+          `Cache MISS (stream) for query: "${dto.query}". Running streaming pipeline...`,
+        );
+
+        const searchResults = await this.queryService.search(dto);
+        const endTimer = this.generationTimer.startTimer();
+
+        if (isAborted) {
+          endTimer();
+          return;
+        }
+
+        const formattedSources: AnswerSource[] = searchResults.map(
+          (res, i) => ({
+            citation: `[Source ${i + 1}]`,
+            documentTitle: res.documentTitle,
+            chunkId: res.chunkId,
+            similarity: res.similarity,
+          }),
+        );
+
+        // Emit initial sources event
+        subscriber.next({
+          data: {
+            type: 'sources',
+            data: formattedSources,
+          },
+        });
+
+        if (!searchResults.length) {
+          subscriber.next({
+            data: {
+              type: 'token',
+              content: 'No matching documents found.',
+            },
+          });
+          subscriber.next({
+            data: {
+              type: 'done',
+              isCached: false,
+            },
+          });
+          endTimer();
+          subscriber.complete();
+          return;
+        }
+
+        const formattedContext = searchResults
+          .map(
+            (result, index) =>
+              `[Source ${index + 1}] (Document: ${result.documentTitle}):\n${result.content}`,
+          )
+          .join('\n\n---\n\n');
+
+        const systemPrompt = `You are a highly precise knowledge-base assistant. Answer the user's question using ONLY the provided sources below.\n\nRULES:\n1. Cite sources inline as [Source N].\n2. Do not hallucinate.\n\nSOURCES:\n${formattedContext}`;
+
+        try {
+          const stream = await this.openai.chat.completions.create({
+            model: this.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: dto.query },
+            ],
+            temperature: 0.1,
+            stream: true,
+          });
+
+          let fullAnswer = '';
+
+          for await (const chunk of stream) {
+            if (isAborted) break;
+            const content = chunk.choices[0]?.delta?.content || '';
+            if (content) {
+              fullAnswer += content;
+              subscriber.next({
+                data: {
+                  type: 'token',
+                  content,
+                },
+              });
+            }
+          }
+
+          if (!isAborted) {
+            endTimer();
+
+            // Store full answer in Redis cache
+            const cachePayload: AnswerResponse = {
+              query: dto.query,
+              answer: fullAnswer,
+              sources: formattedSources,
+              isCached: true,
+            };
+
+            await this.redis.set(
+              cacheKey,
+              JSON.stringify(cachePayload),
+              'EX',
+              this.CACHE_TTL,
+            );
+
+            subscriber.next({
+              data: {
+                type: 'done',
+                isCached: false,
+              },
+            });
+
+            subscriber.complete();
+          }
+        } catch (error) {
+          endTimer();
+          subscriber.error(error);
+        }
+      };
+
+      runPipeline().catch((err) => {
+        subscriber.error(err);
+      });
+
+      return () => {
+        isAborted = true;
+      };
+    });
   }
 
   /**

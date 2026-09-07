@@ -14,6 +14,10 @@ export default class RedisMock {
     return 'OK';
   }
 
+  call(_command: string, ..._args: any[]): any {
+    return [1, 60000, 0, 0];
+  }
+
   ping(): string {
     return 'PONG';
   }

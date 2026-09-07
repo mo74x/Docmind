@@ -6,6 +6,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class SearchQueryDto {
@@ -23,8 +24,9 @@ export class SearchQueryDto {
     minimum: 1,
     maximum: 20,
   })
-  @IsNumber()
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
   @Min(1)
   @Max(20)
   limit?: number = 5;

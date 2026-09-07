@@ -12,8 +12,8 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
 [![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
 [![CI/CD](https://github.com/mo74x/Docmind/actions/workflows/ci.yml/badge.svg)](https://github.com/mo74x/Docmind/actions/workflows/ci.yml)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-84%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
-[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-21%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-89%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-26%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
@@ -33,6 +33,7 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [6. API Key Authentication & Route Security](#6-api-key-authentication--route-security)
   - [7. Production Docker & Container Orchestration](#7-production-docker--container-orchestration)
   - [8. Real-Time Ingestion Progress Streaming (SSE)](#8-real-time-ingestion-progress-streaming-sse)
+  - [9. Real-Time RAG Answer Streaming (SSE)](#9-real-time-rag-answer-streaming-sse)
 - [Observability & Monitoring](#observability--monitoring)
   - [Structured Logging (Winston)](#structured-logging-winston)
   - [Prometheus Metrics](#prometheus-metrics)
@@ -69,6 +70,7 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 | **Chunking** | Context-Preserving | Boundary-aware splitting prioritizes word structures with sliding window overlaps to prevent semantic cutoff. |
 | **Vector DB** | Native PostgreSQL | Utilizes PostgreSQL with `pgvector` and an `ivfflat` cosine similarity index for fast vector search without external vector DB overhead. |
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
+| **RAG** | Real-Time Answer Streaming | Token-by-token LLM answer streaming via Server-Sent Events (`GET /query/ask/stream` & `POST /query/ask/stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. |
 | **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
 | **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
 | **DevOps** | Multi-Stage Docker | Hardened multi-stage `Dockerfile` (Node 20 Alpine, unprivileged `node` user) with `docker-compose.yml` orchestrating API, PostgreSQL (`pgvector`), and Redis with healthchecks. |
@@ -412,6 +414,51 @@ sequenceDiagram
 
 ---
 
+### 9. Real-Time RAG Answer Streaming (SSE)
+
+To eliminate the 2–4 second response latency of traditional non-streaming RAG queries, DocMind provides a real-time token streaming pipeline (`GET /query/ask/stream` and `POST /query/ask/stream`) using Server-Sent Events (`text/event-stream`).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Controller as Query Controller
+    participant Service as Answer Service
+    participant Redis as Redis Cache
+    participant pgvector as PostgreSQL / pgvector
+    participant OpenAI as OpenAI Chat API
+
+    Client->>Controller: GET /query/ask/stream?query=...
+    Controller->>Service: askQuestionStream(dto)
+    Service->>Redis: Check normalized query cache
+    alt Cache HIT
+        Redis-->>Service: Return cached JSON payload
+        Service-->>Client: SSE Event { type: "sources", data: [...] }
+        Service-->>Client: SSE Event { type: "token", content: "..." }
+        Service-->>Client: SSE Event { type: "done", isCached: true }
+        Service->>Client: subscriber.complete() (Close stream)
+    else Cache MISS
+        Service->>pgvector: Vector similarity search (top-k)
+        pgvector-->>Service: Retrieved source chunks & cosine similarity
+        Service-->>Client: SSE Event { type: "sources", data: formattedSources }
+        Service->>OpenAI: chat.completions.create({ stream: true, ... })
+        loop For Each Token Delta
+            OpenAI-->>Service: chunk { delta: { content: "token" } }
+            Service-->>Client: SSE Event { type: "token", content: "token" }
+        end
+        Service->>Redis: Set cache with full answer (EX 86400s)
+        Service-->>Client: SSE Event { type: "done", isCached: false }
+        Service->>Client: subscriber.complete() (Close stream)
+    end
+```
+
+- **Sub-300ms Perceived Latency**: Time-To-First-Token (TTFT) drops drastically by yielding tokens the millisecond OpenAI begins generation.
+- **Immediate Citation Delivery**: The `sources` event fires *prior* to token generation, allowing client UIs to render citation headers and reference cards immediately.
+- **Cache Transparency**: Repeated queries stream cached answers with `isCached: true`, maintaining identical event protocol semantics while returning in sub-milliseconds.
+- **Dual Transport Support**: Supports both standard HTTP `GET` with query params (browser `EventSource` compatible) and HTTP `POST` with JSON bodies for large query strings.
+
+---
+
 ## Observability & Monitoring
 
 DocMind ships with production-grade observability built-in, requiring **zero external configuration** to start collecting metrics and structured logs.
@@ -731,11 +778,52 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 }
 ```
 
+#### 9. Stream RAG Answer (Token-by-Token SSE)
+`GET /query/ask/stream` & `POST /query/ask/stream`
+
+Streams AI-synthesized responses token-by-token via Server-Sent Events (`text/event-stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. Throttled to **5 requests/minute**.
+
+**Query Parameters (`GET`)**
+| Parameter | Type | Default | Validation / Constraints | Description |
+|:---|:---|:---|:---|:---|
+| `query` | string | — | Min 1 char | The question to ask the knowledge base (**Required**) |
+| `limit` | number | `5` | Min: `1`, Max: `20` | Number of matching chunks to retrieve |
+
+**Request Body (`POST`)**
+```json
+{
+  "query": "How does DocMind handle background processing?",
+  "limit": 3
+}
+```
+
+**SSE Event Types Delivered:**
+1. `sources`: Emitted immediately upon vector retrieval. Provides full metadata, document titles, chunk IDs, and similarity scores.
+2. `token`: Incremental token deltas streamed as OpenAI generates the response.
+3. `done`: Terminal event signaling completion and whether the payload was served from cache.
+
+**Stream Response Example (`text/event-stream`)**
+```text
+data: {"type":"sources","data":[{"citation":"[Source 1]","documentTitle":"DocMind Architecture Overview","chunkId":"f9e2b10a-3c4d-4e5f-9a8b-1c2d3e4f5a6b","similarity":0.8924}]}
+
+data: {"type":"token","content":"DocMind "}
+
+data: {"type":"token","content":"handles "}
+
+data: {"type":"token","content":"background "}
+
+data: {"type":"token","content":"processing "}
+
+data: {"type":"token","content":"using BullMQ backed by Redis [Source 1]."}
+
+data: {"type":"done","isCached":false}
+```
+
 ---
 
 ### Observability Endpoints
 
-#### 9. Prometheus Metrics
+#### 10. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -773,7 +861,7 @@ vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
 ```
 
-#### 10. Health Check
+#### 11. Health Check
 `GET /health`
 
 Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.
@@ -875,6 +963,7 @@ npm run lint
 | **Ingestion Queue Processor** | `src/ingestion/ingestion.processor.spec.ts` | Unit | 3 | BullMQ job processing, job progress updates, and real-time event broadcasting across CHUNKING (25%), EMBEDDING (50%-90%), READY (100%), and terminal FAILED. |
 | **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | 14 | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
 | **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | 6 | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
+| **RAG Answer Streaming** | `src/query/answer-stream.spec.ts` | Unit | 5 | Token-by-token streaming, incremental delta emission, cache hits without LLM invocation, fallback handling on empty vector results, client unsubscribe abort cleanup, and error propagation. |
 | **Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 4 | Cosine distance `<->` operator SQL formatting, vector parameter serialization (`[0.1, 0.2, ...]`), and limit boundaries. |
 | **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | 10 | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
 | **Health Controller** | `src/health/health.controller.spec.ts` | Unit | 5 | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
@@ -882,6 +971,7 @@ npm run lint
 | **App Controller** | `src/app.controller.spec.ts` | Unit | 1 | Root `/` route sanity test. |
 | **Application Lifecycle E2E** | `test/app.e2e-spec.ts` | E2E | 2 | HTTP GET `/health`, `/metrics`, unhandled route 404 formatting, and global filter verification. |
 | **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | 19 | Full HTTP lifecycle for raw text ingestion, multipart file uploads (`.pdf`, `.docx`, `.txt`), paginated document listing with metadata, cascade deletion, and live SSE progress streaming (`text/event-stream`). |
+| **RAG Streaming E2E** | `test/query-stream.e2e-spec.ts` | E2E | 5 | Full HTTP lifecycle for `GET /query/ask/stream` and `POST /query/ask/stream`, verifying `text/event-stream` headers, typed event emission sequence (`sources`, `token`, `done`), parameter validation, and error filters. |
 
 > [!NOTE]
 > All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost.
@@ -985,6 +1075,7 @@ npm run start:dev
 | `http://localhost:3000/api/docs` | Interactive Swagger UI |
 | `http://localhost:3000/health` | Health Check (DB & Redis) |
 | `http://localhost:3000/metrics` | Prometheus Metrics |
+| `http://localhost:3000/query/ask/stream` | Real-Time RAG Answer Streaming (SSE) |
 
 ---
 
@@ -1014,11 +1105,16 @@ curl -X POST http://localhost:3000/query/search \
   -H "x-api-key: your-secret-api-key" \
   -d '{"query": "How does DocMind handle background processing?", "limit": 3}'
 
-# 5. Grounded RAG Q&A with citations
+# 5. Grounded RAG Q&A with citations (Synchronous)
 curl -X POST http://localhost:3000/query/ask \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-secret-api-key" \
   -d '{"query": "How does DocMind handle background processing?"}'
+
+# 6. Stream grounded RAG Q&A response token-by-token in real-time (SSE)
+curl -N -H "Accept: text/event-stream" \
+  -H "x-api-key: your-secret-api-key" \
+  "http://localhost:3000/query/ask/stream?query=How+does+DocMind+handle+background+processing%3F"
 ```
 
 ---
@@ -1037,11 +1133,12 @@ docmind/
 ├── .prettierrc                     # Prettier styling standards
 ├── package.json
 ├── tsconfig.json
-├── test/                           # E2E Test suites & configurations (21 tests)
+├── test/                           # E2E Test suites & configurations (26 tests)
 │   ├── app.e2e-spec.ts             # Health, metrics & filter E2E tests
 │   ├── documents.e2e-spec.ts       # Text ingestion, file upload, pagination, deletion & SSE E2E tests
+│   ├── query-stream.e2e-spec.ts    # Token-by-token SSE streaming RAG Q&A E2E tests
 │   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
-├── src/                            # Application source & unit tests (84 tests)
+├── src/                            # Application source & unit tests (89 tests)
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
 │   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
 │   ├── __mocks__/                  # Pure ESM module mappings for high-speed isolated testing
@@ -1097,14 +1194,15 @@ docmind/
 │   │   ├── embeddings.service.ts   # OpenAI batch embeddings client
 │   │   └── embeddings.module.ts
 │   ├── query/
-│   │   ├── query.controller.ts     # Semantic search & Q&A endpoints with rate limits
+│   │   ├── query.controller.ts     # Semantic search, Q&A, and SSE streaming endpoints with rate limits
 │   │   ├── query.service.ts        # Vector similarity search over pgvector
 │   │   ├── query.service.spec.ts
 │   │   ├── answer.service.ts       # RAG answer synthesis, Redis caching & Prometheus instrumentation
 │   │   ├── answer.service.spec.ts
+│   │   ├── answer-stream.spec.ts   # Token-by-token SSE streaming unit tests
 │   │   ├── query.module.ts         # Prometheus metric providers (counters & histograms)
 │   │   └── dto/
-│   │       └── search-query.dto.ts # Query validation DTO
+│   │       └── search-query.dto.ts # Query validation DTO with Type number transformation
 │   └── redis/
 │       └── redis.module.ts         # Global Redis client provider
 ```
