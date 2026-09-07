@@ -1,5 +1,11 @@
-import { IsString, IsNotEmpty, MinLength } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import {
+  IsString,
+  IsNotEmpty,
+  MinLength,
+  IsOptional,
+  IsUUID,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class IngestDocumentDto {
   @ApiProperty({
@@ -19,4 +25,12 @@ export class IngestDocumentDto {
   @IsNotEmpty()
   @MinLength(10)
   content: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional workspace identifier for tenant scoping',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
+  @IsOptional()
+  @IsUUID()
+  workspaceId?: string;
 }

@@ -21,7 +21,8 @@
     "format:check": "prettier --check .",
     "migration:run": "ts-node src/migrations/run-pgvector.ts",
     "migration:hybrid": "ts-node src/migrations/run-hybrid-migration.ts",
-    "migration:chat": "ts-node src/migrations/run-chat-migration.ts"
+    "migration:chat": "ts-node src/migrations/run-chat-migration.ts",
+    "migration:workspaces": "ts-node src/migrations/run-workspaces-migration.ts"
   },
   "dependencies": {
     "@nest-lab/throttler-storage-redis": "^1.1.0",

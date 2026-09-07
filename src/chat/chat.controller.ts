@@ -31,6 +31,7 @@ import { StreamMessageQueryDto } from './dto/stream-message-query.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 import { ChatSession } from './entities/chat-session.entity';
+import { CurrentWorkspaceId } from '../auth/decorators/current-workspace.decorator';
 
 @ApiTags('Chat & Conversational Memory')
 @Controller('chat')
@@ -46,8 +47,12 @@ export class ChatController {
     description: 'Chat session created successfully',
     type: ChatSession,
   })
-  async createSession(@Body() dto: CreateChatSessionDto): Promise<ChatSession> {
-    return this.chatService.createSession(dto);
+  async createSession(
+    @Body() dto: CreateChatSessionDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ): Promise<ChatSession> {
+    const effectiveWorkspaceId = workspaceId || dto?.workspaceId || null;
+    return this.chatService.createSession(dto, effectiveWorkspaceId);
   }
 
   @Get('sessions')
@@ -59,8 +64,9 @@ export class ChatController {
   })
   async listSessions(
     @Query() paginationDto: PaginationDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ): Promise<PaginatedResponseDto<ChatSession>> {
-    return this.chatService.listSessions(paginationDto);
+    return this.chatService.listSessions(paginationDto, workspaceId);
   }
 
   @Get('sessions/:id')
@@ -76,8 +82,9 @@ export class ChatController {
   @ApiResponse({ status: 404, description: 'Chat session not found' })
   async getSession(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ): Promise<ChatSession> {
-    return this.chatService.getSessionWithMessages(id);
+    return this.chatService.getSessionWithMessages(id, workspaceId);
   }
 
   @Delete('sessions/:id')
@@ -91,8 +98,9 @@ export class ChatController {
   @ApiResponse({ status: 404, description: 'Chat session not found' })
   async deleteSession(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ): Promise<{ message: string; id: string }> {
-    await this.chatService.deleteSession(id);
+    await this.chatService.deleteSession(id, workspaceId);
     return {
       message: 'Chat session deleted successfully',
       id,
@@ -116,8 +124,9 @@ export class ChatController {
   async sendMessage(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SendMessageDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ): Promise<SendMessageResponse> {
-    return this.chatService.sendMessage(id, dto);
+    return this.chatService.sendMessage(id, dto, workspaceId);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60000 } })
@@ -151,8 +160,9 @@ export class ChatController {
   sendMessageStreamGet(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() dto: StreamMessageQueryDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ): Observable<MessageEvent> {
-    return this.chatService.sendMessageStream(id, dto);
+    return this.chatService.sendMessageStream(id, dto, workspaceId);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60000 } })
@@ -171,30 +181,33 @@ export class ChatController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SendMessageDto,
     @Res() res: Response,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ): void {
     res.status(HttpStatus.OK);
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
 
-    const subscription = this.chatService.sendMessageStream(id, dto).subscribe({
-      next: (event) => {
-        res.write(`data: ${JSON.stringify(event.data)}\n\n`);
-      },
-      error: (err: unknown) => {
-        const errorMsg =
-          err instanceof Error
-            ? err.message
-            : 'Internal error during chat streaming';
-        res.write(
-          `data: ${JSON.stringify({ type: 'error', error: errorMsg })}\n\n`,
-        );
-        res.end();
-      },
-      complete: () => {
-        res.end();
-      },
-    });
+    const subscription = this.chatService
+      .sendMessageStream(id, dto, workspaceId)
+      .subscribe({
+        next: (event) => {
+          res.write(`data: ${JSON.stringify(event.data)}\n\n`);
+        },
+        error: (err: unknown) => {
+          const errorMsg =
+            err instanceof Error
+              ? err.message
+              : 'Internal error during chat streaming';
+          res.write(
+            `data: ${JSON.stringify({ type: 'error', error: errorMsg })}\n\n`,
+          );
+          res.end();
+        },
+        complete: () => {
+          res.end();
+        },
+      });
 
     res.on('close', () => {
       subscription.unsubscribe();

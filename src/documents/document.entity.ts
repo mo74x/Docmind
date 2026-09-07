@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 
 export enum DocumentStatus {
@@ -33,6 +34,10 @@ export class Document {
 
   @Column({ type: 'text', nullable: true })
   failureReason: string | null;
+
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  workspaceId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

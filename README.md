@@ -1,8 +1,8 @@
 # DocMind
 
-> **Intelligent Document Ingestion & Retrieval-Augmented Generation (RAG) Backend**
+> **Enterprise Document Ingestion & Retrieval-Augmented Generation (RAG) Backend**
 
-Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Caching), **OpenAI**, **Prometheus**, and **Winston**.
+Built with **NestJS 11**, **PostgreSQL 16** (`pgvector`), **Redis 7** (`BullMQ` & Caching), **OpenAI**, **Prometheus**, and **Winston**.
 
 [![NestJS](https://img.shields.io/badge/NestJS-v11-ea2845?logo=nestjs&logoColor=white)](https://nestjs.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-v5.7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -12,8 +12,8 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
 [![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-e6522c?logo=prometheus&logoColor=white)](https://prometheus.io)
 [![Docker](https://img.shields.io/badge/Docker-Multi--stage%20Build-2496ed?logo=docker&logoColor=white)](https://www.docker.com)
 [![CI/CD](https://github.com/mo74x/Docmind/actions/workflows/ci.yml/badge.svg)](https://github.com/mo74x/Docmind/actions/workflows/ci.yml)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-111%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
-[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-34%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-122%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
+[![E2E Tests](https://img.shields.io/badge/E2E%20Tests-41%20passed-brightgreen?logo=jest&logoColor=white)](https://jestjs.io)
 [![License](https://img.shields.io/badge/License-UNLICENSED-lightgrey)]()
 
 ---
@@ -28,18 +28,20 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [1. Multi-Format File Upload & Text Extraction](#1-multi-format-file-upload--text-extraction)
   - [2. Asynchronous Ingestion Pipeline](#2-asynchronous-ingestion-pipeline)
   - [3. Semantic Search & RAG Q&A Pipeline](#3-semantic-search--rag-qa-pipeline)
-  - [4. Intelligent Redis Caching](#4-intelligent-redis-caching)
+  - [4. Intelligent Redis Caching & Partitioning](#4-intelligent-redis-caching--partitioning)
   - [5. Rate Limiting & Protection](#5-rate-limiting--protection)
-  - [6. API Key Authentication & Route Security](#6-api-key-authentication--route-security)
+  - [6. API Key Authentication & Multi-Tenant Route Security](#6-api-key-authentication--multi-tenant-route-security)
   - [7. Production Docker & Container Orchestration](#7-production-docker--container-orchestration)
   - [8. Real-Time Ingestion Progress Streaming (SSE)](#8-real-time-ingestion-progress-streaming-sse)
   - [9. Real-Time RAG Answer Streaming (SSE)](#9-real-time-rag-answer-streaming-sse)
   - [10. Multi-Turn Conversational Memory & Query Reformulation](#10-multi-turn-conversational-memory--query-reformulation)
+  - [11. Multi-Tenancy & Workspace Access Control (RBAC)](#11-multi-tenancy--workspace-access-control-rbac)
 - [Observability & Monitoring](#observability--monitoring)
   - [Structured Logging (Winston)](#structured-logging-winston)
   - [Prometheus Metrics](#prometheus-metrics)
 - [Database Schema & Indexing](#database-schema--indexing)
 - [API Reference](#api-reference)
+  - [Workspaces & Multi-Tenancy Endpoints](#workspaces--multi-tenancy-endpoints)
   - [Documents Endpoints](#documents-endpoints)
   - [Query & Retrieval Endpoints](#query--retrieval-endpoints)
   - [Chat & Conversational Memory Endpoints](#chat--conversational-memory-endpoints)
@@ -50,15 +52,21 @@ Built with **NestJS**, **PostgreSQL** (`pgvector`), **Redis** (`BullMQ` & Cachin
   - [Test Suite Breakdown](#test-suite-breakdown)
   - [CI/CD Pipeline (GitHub Actions)](#cicd-pipeline-github-actions)
 - [Getting Started](#getting-started)
+  - [Option A: Full Stack with Docker Compose (Recommended)](#option-a-run-full-stack-with-docker-compose-recommended)
+  - [Option B: Local Node.js Development](#option-b-local-nodejs-development)
+  - [Available Endpoints](#available-endpoints)
+  - [Quick Testing (cURL Examples)](#quick-testing-curl-examples)
 - [Project Structure](#project-structure)
 
 ---
 
 ## Overview
 
-DocMind is a high-performance backend platform for managing knowledge-base documents and executing low-latency **Retrieval-Augmented Generation (RAG)**. It decouples CPU- and network-heavy document processing (chunking, OpenAI embeddings generation, vector indexing) from HTTP request lifecycles using asynchronous queues, and serves semantic search and grounded AI question answering with multi-tier Redis caching and distributed rate limiting.
+**DocMind** is a production-grade, enterprise backend platform for managing knowledge-base documents and executing low-latency **Retrieval-Augmented Generation (RAG)** with strict multi-tenancy, multi-format parsing, and conversational memory.
 
-The platform exposes **Prometheus-compatible metrics** for production monitoring and uses **Winston structured logging** for full operational visibility.
+It decouples CPU- and network-heavy document processing (chunking, OpenAI embedding generation, vector indexing) from HTTP request lifecycles using distributed asynchronous queues (`BullMQ` on Redis), and serves semantic search, hybrid retrieval (dense vectors + full-text search with Reciprocal Rank Fusion), and grounded AI question answering with multi-tier Redis caching and distributed rate limiting.
+
+The platform provides **Prometheus-compatible metrics** for real-time observability, **Winston structured logging** with execution deltas, and **Server-Sent Events (SSE)** for streaming ingestion progress, RAG answers, and multi-turn conversational responses.
 
 ---
 
@@ -66,6 +74,7 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 
 | Category | Feature | Description |
 |:---|:---|:---|
+| **Security** | Multi-Tenancy & RBAC | Enterprise workspace isolation (`/workspaces`) with dual-mode authentication (Super Admin master key vs scoped workspace secret tokens), strict SQL partition filtering, and tenant-partitioned Redis caching. |
 | **Ingestion** | Multi-Format File Upload | Upload binary documents (`.pdf`, `.docx`, `.txt` up to 10MB) via `POST /documents/upload` with automatic text extraction, title sanitization, and background RAG queueing. |
 | **Ingestion** | Asynchronous Pipeline | Ingest large texts without blocking HTTP clients. Track lifecycle states (`PENDING` → `CHUNKING` → `EMBEDDING` → `READY` / `FAILED`) in real-time. |
 | **Documents** | Scalable Pagination | TypeORM `findAndCount` pagination supporting `page`, `limit` (1-100), and `order` (`ASC`/`DESC`), with automatic cascade deletion of chunks on document removal. |
@@ -75,11 +84,11 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
 | **RAG** | Real-Time Answer Streaming | Token-by-token LLM answer streaming via Server-Sent Events (`GET /query/ask/stream` & `POST /query/ask/stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. |
 | **Memory** | Conversational Chat Sessions | Multi-turn chat persistence (`/chat/sessions`) with automatic query reformulation (resolves pronouns like "it", "this" via LLM contextualization before retrieval) and SSE token streaming. |
-| **Caching** | Redis Response Cache | SHA-256 normalized query caching delivers instant sub-millisecond responses on repeated or similarly phrased queries (24h TTL). |
+| **Caching** | Redis Response Cache | Deterministic SHA-256 normalized query caching with tenant key scoping delivers instant sub-millisecond responses on repeated queries (24h TTL). |
 | **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
 | **DevOps** | Multi-Stage Docker | Hardened multi-stage `Dockerfile` (Node 20 Alpine, unprivileged `node` user) with `docker-compose.yml` orchestrating API, PostgreSQL (`pgvector`), and Redis with healthchecks. |
 | **Observability** | Prometheus + Winston | Production-grade metrics (`/metrics`) with custom histograms and counters, plus structured JSON logging with timestamps and execution deltas. |
-| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites covering 100% of critical paths with isolated in-memory test mocks. |
+| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites (163 total passing tests) covering 100% of critical paths with isolated in-memory test mocks. |
 | **Docs** | Interactive Swagger | Comprehensive OpenAPI spec with API Key security definitions and multipart file upload schemas at `/api/docs`. |
 
 ---
@@ -89,14 +98,14 @@ The platform exposes **Prometheus-compatible metrics** for production monitoring
 ```mermaid
 graph TB
     subgraph "Clients"
-        CLIENT[HTTP Client / Frontend / Swagger UI]
+        CLIENT[HTTP Client / Frontend / Swagger UI / EventSource]
     end
 
     subgraph "API & Guard Layer"
-        GATEWAY[NestJS Controller]
-        AUTH[API Key Guard / @Public Decorator]
-        THROTTLE[Redis-Backed Rate Limiter]
-        VALIDATION[DTO Validation Pipe]
+        GATEWAY[NestJS Controller Gateway]
+        AUTH[ApiKeyGuard: Master Admin & Workspace Scoped]
+        THROTTLE[Redis-Backed Throttler Guard]
+        VALIDATION[DTO Validation & Transformation Pipe]
         MULTER[Multer Multipart File Interceptor]
     end
 
@@ -106,12 +115,18 @@ graph TB
         BULLMQ[BullMQ Ingestion Queue]
         WORKER[Ingestion Processor]
         CHUNKER[Boundary-Aware Chunker]
+        INGEST_EVT[Ingestion Events Service<br/>EventEmitter & Redis PubSub]
     end
 
     subgraph "Query & RAG Subsystem"
-        QUERY_SVC[Query Service]
+        QUERY_SVC[Hybrid Query Service<br/>Dense + FTS + RRF]
         ANSWER_SVC[Answer Service]
-        NORMALIZER[Query Normalizer & Hasher]
+        NORMALIZER[Query Normalizer & SHA-256 Hasher]
+    end
+
+    subgraph "Chat & Conversational Subsystem"
+        CHAT_SVC[Chat Service]
+        REFORMULATOR[LLM Query Reformulation Engine]
     end
 
     subgraph "Observability"
@@ -126,11 +141,12 @@ graph TB
 
     subgraph "Persistence & Infrastructure"
         REDIS[(Redis 7<br/>Queue + Cache + Throttler)]
-        PG[(PostgreSQL 16 + pgvector<br/>Documents + Chunks)]
+        PG[(PostgreSQL 16 + pgvector<br/>Workspaces, Documents, Chunks, Sessions, Messages)]
     end
 
     CLIENT --> THROTTLE
-    THROTTLE --> GATEWAY
+    THROTTLE --> AUTH
+    AUTH --> GATEWAY
     GATEWAY --> VALIDATION
 
     %% Raw Text Ingestion Flow
@@ -148,22 +164,35 @@ graph TB
     WORKER --> CHUNKER
     WORKER -->|batch embed| OPENAI_EMBED
     WORKER -->|batch insert chunks & vectors| PG
-    WORKER -->|update status READY| PG
+    WORKER -->|emit progress events| INGEST_EVT
+    INGEST_EVT -->|SSE /documents/:id/progress| CLIENT
 
     %% Query & Answer Flow
     VALIDATION -->|POST /query/search| QUERY_SVC
     VALIDATION -->|POST /query/ask| ANSWER_SVC
+    VALIDATION -->|GET/POST /query/ask/stream| ANSWER_SVC
     ANSWER_SVC --> NORMALIZER
-    NORMALIZER -->|check cache| REDIS
-    ANSWER_SVC -->|cache miss -> search| QUERY_SVC
+    NORMALIZER -->|check tenant cache| REDIS
+    ANSWER_SVC -->|cache miss -> hybrid search| QUERY_SVC
     QUERY_SVC -->|embed query| OPENAI_EMBED
-    QUERY_SVC -->|vector similarity search| PG
-    ANSWER_SVC -->|generate grounded answer| OPENAI_CHAT
+    QUERY_SVC -->|hybrid RRF search| PG
+    ANSWER_SVC -->|grounded answer & streaming| OPENAI_CHAT
     ANSWER_SVC -->|set cache EX 86400s| REDIS
+
+    %% Chat & Memory Flow
+    VALIDATION -->|POST /chat/sessions/:id/messages| CHAT_SVC
+    VALIDATION -->|GET/POST /chat/sessions/:id/messages/stream| CHAT_SVC
+    CHAT_SVC -->|fetch conversation history| PG
+    CHAT_SVC --> REFORMULATOR
+    REFORMULATOR -->|contextualize query| OPENAI_CHAT
+    CHAT_SVC -->|retrieve chunks with standalone query| QUERY_SVC
+    CHAT_SVC -->|generate & stream answer| OPENAI_CHAT
+    CHAT_SVC -->|persist user & assistant messages| PG
 
     %% Observability
     ANSWER_SVC -->|record metrics| PROM
-    GATEWAY -->|structured logs| WINSTON
+    CHAT_SVC -->|record metrics| PROM
+    GATEWAY -->|structured JSON logs| WINSTON
     CLIENT -->|GET /metrics| PROM
 ```
 
@@ -178,11 +207,11 @@ graph TB
 | **Language** | TypeScript | v5.7 with strict type checking |
 | **File Processing** | `pdf-parse` & `mammoth` | Multi-format text extraction from PDF, DOCX, and TXT files |
 | **Containerization** | Docker & Docker Compose | Hardened multi-stage build (Node 20 Alpine) & orchestrated multi-container stack |
-| **Database** | PostgreSQL 16 | Relational storage for documents and text chunks |
+| **Database** | PostgreSQL 16 | Relational storage for workspaces, documents, chunks, chat sessions, and messages |
 | **Vector Engine** | `pgvector` | Native `vector(1536)` data type with `ivfflat` cosine similarity index |
-| **ORM** | TypeORM | Entity mappings and relational transactions; raw SQL for vector operations |
+| **ORM** | TypeORM | Entity mappings and relational transactions; raw parameterized SQL for vector operations |
 | **Job Queue** | BullMQ + Redis 7 | Distributed job queue for background ingestion pipeline |
-| **Caching** | Redis 7 + `ioredis` | Normalized query hash caching (24h TTL) |
+| **Caching** | Redis 7 + `ioredis` | Normalized query hash caching with tenant scoping (24h TTL) |
 | **Rate Limiting** | `@nestjs/throttler` | Distributed Redis-backed throttling storage |
 | **AI / LLM** | OpenAI API | `text-embedding-3-small` (1536 dim) & `gpt-4o-mini` |
 | **Metrics** | Prometheus + `prom-client` | Custom counters, histograms, and default Node.js runtime metrics via `@willsoto/nestjs-prometheus` |
@@ -247,6 +276,8 @@ sequenceDiagram
 - **Title Sanitization**: When an optional `title` is not provided in form data, `sanitizeTitleFromFilename` automatically strips the file extension and whitespace to generate a human-readable title.
 - **Fail-Fast Validation**: Empty files, corrupt binary archives, or files yielding zero readable characters immediately throw descriptive `400 Bad Request` exceptions before touching database or queue resources.
 
+---
+
 ### 2. Asynchronous Ingestion Pipeline
 
 When a document is uploaded, it is assigned a `PENDING` state and pushed to BullMQ. The client receives an immediate response with the document ID, avoiding HTTP timeouts on large texts.
@@ -281,13 +312,15 @@ sequenceDiagram
         Worker->>Embedder: embedBatch(chunkBatch)
         Embedder->>OpenAI: POST /v1/embeddings (text-embedding-3-small)
         OpenAI-->>Embedder: number[][] vectors (1536 dim)
-        Worker->>DB: INSERT INTO chunks (documentId, chunkIndex, content, embedding)
+        Worker->>DB: INSERT INTO chunks (documentId, workspaceId, chunkIndex, content, embedding)
     end
 
     Worker->>DB: UPDATE Document SET status = 'READY'
     Client->>Controller: GET /documents/:id
     Controller-->>Client: 200 OK { id, status: READY }
 ```
+
+---
 
 ### 3. Semantic Search & RAG Q&A Pipeline
 
@@ -309,7 +342,7 @@ sequenceDiagram
     Controller->>AnswerSvc: askQuestion(dto)
     AnswerSvc->>Prometheus: queriesCounter.inc()
     AnswerSvc->>AnswerSvc: Normalize & SHA-256 Hash query
-    AnswerSvc->>Redis: GET docmind:cache:ask:<hash>
+    AnswerSvc->>Redis: GET docmind:cache:ask:<workspaceId>:<hash>
     
     alt Cache HIT
         Redis-->>AnswerSvc: Cached Answer JSON
@@ -329,15 +362,25 @@ sequenceDiagram
         AnswerSvc->>OpenAI: POST /v1/chat/completions (Grounding Prompt + Context)
         OpenAI-->>AnswerSvc: Generated Answer with [Source N] citations
         AnswerSvc->>Prometheus: generationTimer.end()
-        AnswerSvc->>Redis: SET docmind:cache:ask:<hash> (EX 86400s)
+        AnswerSvc->>Redis: SET docmind:cache:ask:<workspaceId>:<hash> (EX 86400s)
         AnswerSvc-->>Controller: AnswerResponse { answer, sources, isCached: false }
         Controller-->>Client: 200 OK Response
     end
 ```
 
-### 4. Intelligent Redis Caching
+---
 
-The `AnswerService` normalizes user queries (case folding, stripping punctuation, collapsing whitespace) before computing a deterministic SHA-256 hash. Cached results expire after 24 hours (86,400 seconds) and include complete source metadata and citations.
+### 4. Intelligent Redis Caching & Partitioning
+
+The `AnswerService` normalizes user queries (case folding, stripping punctuation, collapsing whitespace) before computing a deterministic SHA-256 hash. 
+
+Cached results are scoped by tenant workspace:
+```text
+docmind:cache:ask:<workspaceId || 'global'>:<sha256_query_hash>
+```
+Cached results expire after 24 hours (86,400 seconds) and include complete source metadata and citations, guaranteeing sub-millisecond responses without cross-tenant cache leakage.
+
+---
 
 ### 5. Rate Limiting & Protection
 
@@ -345,14 +388,22 @@ DocMind uses `@nestjs/throttler` backed by Redis storage to enforce rate limits 
 - **Global / Default**: 10 requests / minute
 - **`/query/search`**: 20 requests / minute
 - **`/query/ask`**: 5 requests / minute
+- **`/query/ask/stream`**: 5 requests / minute
+- **`/chat/sessions/:id/messages/stream`**: 10 requests / minute
 
-### 6. API Key Authentication & Route Security
+---
+
+### 6. API Key Authentication & Multi-Tenant Route Security
 
 DocMind protects all sensitive API endpoints using a global `ApiKeyGuard` bound via `APP_GUARD`:
 - **Dual-Header Support**: Accepts authentication credentials via either `x-api-key: <token>` or standard `Authorization: Bearer <token>`.
+- **Dual-Mode Identity Resolution**:
+  - **Super Admin (`API_KEY`)**: Unpartitioned access across all tenants, or explicitly scoped to any workspace via `x-workspace-id` header.
+  - **Workspace Scoped Key (`dcm_ws_...`)**: Strictly locked to its own `workspace.id`. Cross-tenant spoofing attempts immediately return `403 Forbidden`.
 - **Public Endpoint Exemption**: Endpoints such as `/health`, `/metrics`, and `/api/docs` are marked with the `@Public()` decorator to allow unrestricted access for Prometheus scraping, load balancers, and documentation inspection.
 - **Zero-Friction Development Mode**: If `API_KEY` is not defined in the environment, the guard automatically logs a development warning and allows incoming requests to pass without rejection.
-- **OpenAPI / Swagger Integration**: The OpenAPI specification at `/api/docs` incorporates the `x-api-key` security scheme directly, allowing interactive authenticated test queries right from the browser.
+
+---
 
 ### 7. Production Docker & Container Orchestration
 
@@ -366,6 +417,8 @@ DocMind includes an enterprise-grade containerization setup designed for minimal
   - Automatically spins up the `api`, `postgres` (`pgvector/pgvector:pg16`), and `redis` (`redis:7-alpine`) services.
   - Implements container-level healthchecks (`pg_isready`, `redis-cli ping`).
   - Utilizes `depends_on` with `condition: service_healthy` so the NestJS application only boots after database and cache services are fully operational.
+
+---
 
 ### 8. Real-Time Ingestion Progress Streaming (SSE)
 
@@ -498,6 +551,62 @@ sequenceDiagram
 
 ---
 
+### 11. Multi-Tenancy & Workspace Access Control (RBAC)
+
+Enterprise RAG architectures require strict multi-tenancy so that documents, vector embeddings, chat histories, and cached answers belonging to different teams or organizations NEVER leak across boundaries:
+
+```mermaid
+flowchart TD
+    subgraph Clients
+        ADM[Super Admin<br/>x-api-key: MASTER_KEY]
+        WSA[Workspace A Client<br/>x-api-key: dcm_ws_aaa...]
+        WSB[Workspace B Client<br/>x-api-key: dcm_ws_bbb...]
+    end
+
+    subgraph AuthGuard["ApiKeyGuard & Tenant Resolution"]
+        G_ADM[Unpartitioned OR x-workspace-id Scoped]
+        G_WSA[Enforces workspaceId = wsA.id<br/>Rejects cross-tenant spoofing]
+        G_WSB[Enforces workspaceId = wsB.id<br/>Rejects cross-tenant spoofing]
+    end
+
+    subgraph StoragePipeline["Ingestion & Chunk Propagation"]
+        DOCS[(documents<br/>workspaceId)]
+        CHUNKS[(chunks<br/>workspaceId)]
+    end
+
+    subgraph SearchPipeline["Cryptographic Partition Filter"]
+        QUERY["($workspaceId::uuid IS NULL OR c.workspaceId = $workspaceId::uuid)"]
+    end
+
+    subgraph CachePipeline["Partitioned Redis Cache"]
+        CACHE[docmind:cache:ask:workspaceId:sha256]
+    end
+
+    ADM --> G_ADM
+    WSA --> G_WSA
+    WSB --> G_WSB
+
+    G_ADM --> StoragePipeline
+    G_WSA --> StoragePipeline
+    G_WSB --> StoragePipeline
+
+    StoragePipeline --> SearchPipeline
+    SearchPipeline --> CachePipeline
+```
+
+- **Dual-Mode Authentication**:
+  - **Super Admin (`API_KEY`)**: Full unpartitioned visibility, or explicit scoping to any workspace via `x-workspace-id` header.
+  - **Workspace Scoped Key (`dcm_ws_...`)**: Strictly locked to its own `workspace.id`. Any attempt to pass a different `x-workspace-id` header returns `403 Forbidden`.
+- **Cryptographic SQL Partitioning**: All retrieval queries (pgvector dense, PostgreSQL tsvector full-text, and hybrid RRF) strictly filter by:
+  ```sql
+  WHERE d.status = 'READY'
+    AND ($workspaceId::uuid IS NULL OR c."workspaceId" = $workspaceId::uuid)
+  ```
+- **Chunk Workspace Propagation**: The BullMQ ingestion worker automatically propagates `document.workspaceId` to all generated chunks during insertion.
+- **Tenant-Partitioned Cache**: Redis cache keys are scoped as `docmind:cache:ask:${workspaceId || 'global'}:${hash}` to guarantee cross-tenant cache isolation.
+
+---
+
 ## Observability & Monitoring
 
 DocMind ships with production-grade observability built-in, requiring **zero external configuration** to start collecting metrics and structured logs.
@@ -537,16 +646,6 @@ A Prometheus-compatible metrics endpoint is exposed at **`GET /metrics`** via `@
 | `llm_generation_duration_seconds` | Histogram | Time spent waiting for OpenAI Chat API response | `0.5, 1, 2, 5, 10` seconds |
 | `vector_search_latency_seconds` | Histogram | Latency of pgvector cosine similarity search | `0.001, 0.005, 0.01, 0.05, 0.1` seconds |
 
-#### Monitoring Architecture
-
-```mermaid
-graph LR
-    APP["DocMind API<br/>(NestJS)"] -->|GET /metrics| PROM["Prometheus<br/>Scraper"]
-    PROM --> GRAFANA["Grafana<br/>Dashboard"]
-    APP -->|stdout / stderr| WINSTON["Winston<br/>JSON Logs"]
-    WINSTON --> LOG_AGG["Log Aggregator<br/>(ELK / Loki / CloudWatch)"]
-```
-
 #### Example Prometheus Queries
 
 ```promql
@@ -566,14 +665,25 @@ rate(vector_search_latency_seconds_sum[5m]) / rate(vector_search_latency_seconds
 
 ```mermaid
 erDiagram
+    Workspace ||--o{ Document : "scopes"
+    Workspace ||--o{ ChatSession : "scopes"
     Document ||--o{ Chunk : "contains"
     ChatSession ||--o{ ChatMessage : "contains"
+
+    Workspace {
+        uuid id PK
+        string name
+        string slug UK
+        string apiKey UK
+        datetime createdAt
+    }
 
     Document {
         uuid id PK
         string title
         text sourceContent
         enum status "PENDING | CHUNKING | EMBEDDING | READY | FAILED"
+        uuid workspaceId FK
         text failureReason
         datetime createdAt
     }
@@ -581,6 +691,7 @@ erDiagram
     Chunk {
         uuid id PK
         uuid documentId FK
+        uuid workspaceId FK
         int chunkIndex
         text content
         vector embedding "vector(1536)"
@@ -591,7 +702,7 @@ erDiagram
     ChatSession {
         uuid id PK
         string title
-        uuid workspaceId
+        uuid workspaceId FK
         datetime createdAt
         datetime updatedAt
     }
@@ -626,9 +737,65 @@ erDiagram
 
 Interactive Swagger documentation is available at `http://localhost:3000/api/docs`.
 
+### Workspaces & Multi-Tenancy Endpoints
+
+#### 1. Create Workspace
+`POST /workspaces`
+
+Creates a new isolated tenant workspace. Generates a unique scoped API key with prefix `dcm_ws_` if omitted.
+
+**Request Body**
+```json
+{
+  "name": "Engineering Team",
+  "slug": "engineering"
+}
+```
+
+**Response (`201 Created`)**
+```json
+{
+  "id": "11111111-1111-1111-1111-111111111111",
+  "name": "Engineering Team",
+  "slug": "engineering",
+  "apiKey": "dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0",
+  "createdAt": "2026-09-07T10:00:00.000Z"
+}
+```
+
+#### 2. List Workspaces
+`GET /workspaces`
+
+Lists all workspaces registered in the system.
+
+**Response (`200 OK`)**
+```json
+[
+  {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "name": "Engineering Team",
+    "slug": "engineering",
+    "apiKey": "dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0",
+    "createdAt": "2026-09-07T10:00:00.000Z"
+  }
+]
+```
+
+#### 3. Get Workspace
+`GET /workspaces/:id`
+
+Retrieves workspace details by UUID.
+
+#### 4. Delete Workspace
+`DELETE /workspaces/:id`
+
+Deletes a workspace by UUID (`204 No Content`).
+
+---
+
 ### Documents Endpoints
 
-#### 1. Ingest Document
+#### 5. Ingest Document
 `POST /documents`
 
 Queues a new document for background chunking, embedding, and vector indexing.
@@ -650,7 +817,7 @@ Queues a new document for background chunking, embedding, and vector indexing.
 }
 ```
 
-#### 2. Upload Document File (PDF, DOCX, TXT)
+#### 6. Upload Document File (PDF, DOCX, TXT)
 `POST /documents/upload`
 
 Uploads a document file (`multipart/form-data`) for automated text extraction and background RAG queueing. Maximum file size is **10MB**.
@@ -670,33 +837,10 @@ Uploads a document file (`multipart/form-data`) for automated text extraction an
 }
 ```
 
-**Common Error Responses (`400 Bad Request`)**
-```json
-// Missing file attachment
-{
-  "statusCode": 400,
-  "timestamp": "2026-09-02T10:00:00.000Z",
-  "path": "/documents/upload",
-  "method": "POST",
-  "error": "Bad Request",
-  "message": "File is required"
-}
-
-// Unsupported extension or mime-type
-{
-  "statusCode": 400,
-  "timestamp": "2026-09-02T10:00:00.000Z",
-  "path": "/documents/upload",
-  "method": "POST",
-  "error": "Bad Request",
-  "message": "Unsupported file format. Supported formats are .pdf, .docx, and .txt"
-}
-```
-
-#### 3. List Documents
+#### 7. List Documents
 `GET /documents`
 
-Retrieves a paginated list of ingested documents ordered chronologically.
+Retrieves a paginated list of ingested documents ordered chronologically. Automatically filtered by workspace if authenticated via workspace-scoped API key or `x-workspace-id` header.
 
 **Query Parameters**
 | Parameter | Type | Default | Validation / Constraints | Description |
@@ -728,7 +872,7 @@ Retrieves a paginated list of ingested documents ordered chronologically.
 }
 ```
 
-#### 4. Get Document Status
+#### 8. Get Document Status
 `GET /documents/:id`
 
 **Response (`200 OK`)**
@@ -742,7 +886,7 @@ Retrieves a paginated list of ingested documents ordered chronologically.
 }
 ```
 
-#### 5. Delete Document
+#### 9. Delete Document
 `DELETE /documents/:id`
 
 Deletes a document record and purges all associated text chunks and vector embeddings from PostgreSQL.
@@ -755,7 +899,7 @@ Deletes a document record and purges all associated text chunks and vector embed
 }
 ```
 
-#### 6. Stream Ingestion Progress (SSE)
+#### 10. Stream Ingestion Progress (SSE)
 `GET /documents/:id/progress`
 
 Establishes a real-time **Server-Sent Events (SSE)** connection streaming progress updates as the document moves through the ingestion queue (`PENDING` → `CHUNKING` 25% → `EMBEDDING` 50%..90% → `READY` 100% or `FAILED`).
@@ -782,7 +926,7 @@ data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"READY","per
 
 ### Query & Retrieval Endpoints
 
-#### 7. Semantic Vector & Hybrid Search
+#### 11. Semantic Vector & Hybrid Search
 `POST /query/search`
 
 Retrieves relevant document chunks using dense vector similarity (`<->`), full-text lexical search (`tsvector`), or **Reciprocal Rank Fusion (RRF)** hybrid retrieval. Throttled to **20 requests/minute**.
@@ -824,7 +968,7 @@ Retrieves relevant document chunks using dense vector similarity (`<->`), full-t
 > $\text{RRF Score} = \frac{1}{60 + \text{rank}_{\text{dense}}} + \frac{1}{60 + \text{rank}_{\text{fts}}}$  
 > This balances deep conceptual semantic matches with exact keyword recall (acronyms, IDs, and error codes).
 
-#### 8. Ask Question (RAG with Citations)
+#### 12. Ask Question (RAG with Citations)
 `POST /query/ask`
 
 Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a grounded answer with inline citations, and caches the result in Redis. Throttled to **5 requests/minute**.
@@ -853,7 +997,7 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 }
 ```
 
-#### 9. Stream RAG Answer (Token-by-Token SSE)
+#### 13. Stream RAG Answer (Token-by-Token SSE)
 `GET /query/ask/stream` & `POST /query/ask/stream`
 
 Streams AI-synthesized responses token-by-token via Server-Sent Events (`text/event-stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. Throttled to **5 requests/minute**.
@@ -898,7 +1042,7 @@ data: {"type":"done","isCached":false}
 
 ### Chat & Conversational Memory Endpoints
 
-#### 10. Create Chat Session
+#### 14. Create Chat Session
 `POST /chat/sessions`
 
 Creates a new multi-turn conversation session.
@@ -922,10 +1066,10 @@ Creates a new multi-turn conversation session.
 }
 ```
 
-#### 11. List Chat Sessions
+#### 15. List Chat Sessions
 `GET /chat/sessions?page=1&limit=10&order=DESC`
 
-Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt`).
+Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt`). Automatically scoped to tenant if workspace credentials are provided.
 
 **Response (`200 OK`)**
 ```json
@@ -949,7 +1093,7 @@ Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt
 }
 ```
 
-#### 12. Get Chat Session with Messages
+#### 16. Get Chat Session with Messages
 `GET /chat/sessions/:id`
 
 Retrieves the session metadata along with its full chronological message history (`createdAt ASC`).
@@ -988,7 +1132,7 @@ Retrieves the session metadata along with its full chronological message history
 }
 ```
 
-#### 13. Send Message (Multi-Turn Conversational RAG)
+#### 17. Send Message (Multi-Turn Conversational RAG)
 `POST /chat/sessions/:id/messages`
 
 Sends a user message into a chat session. The backend automatically condenses previous message turns into a standalone query via OpenAI, retrieves grounded context using Hybrid Search (RRF), synthesizes the assistant response with inline citations, and persists both turns into PostgreSQL.
@@ -1040,7 +1184,7 @@ Sends a user message into a chat session. The backend automatically condenses pr
 }
 ```
 
-#### 14. Stream Conversational Message (SSE)
+#### 18. Stream Conversational Message (SSE)
 `GET /chat/sessions/:id/messages/stream?content=...&mode=hybrid`  
 `POST /chat/sessions/:id/messages/stream`
 
@@ -1062,7 +1206,7 @@ curl -N -X POST http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c89
   -d '{"content": "What is its default overlap size?", "mode": "hybrid", "limit": 3}'
 ```
 
-#### 15. Delete Chat Session
+#### 19. Delete Chat Session
 `DELETE /chat/sessions/:id`
 
 Deletes the session and cascade deletes all contained messages.
@@ -1079,7 +1223,7 @@ Deletes the session and cascade deletes all contained messages.
 
 ### Observability Endpoints
 
-#### 10. Prometheus Metrics
+#### 20. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -1117,7 +1261,7 @@ vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
 ```
 
-#### 11. Health Check
+#### 21. Health Check
 `GET /health`
 
 Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.
@@ -1173,7 +1317,7 @@ Configure application settings via environment variables (or `.env` file):
 | Variable | Type | Default | Description |
 |:---|:---|:---|:---|
 | `PORT` | number | `3000` | HTTP application port |
-| `API_KEY` | string | — | Secret API key for endpoint authentication (optional in dev) |
+| `API_KEY` | string | — | Secret Master Super Admin API key for endpoint authentication |
 | `DATABASE_URL` | string | `postgresql://docmind:docmind_password@localhost:5432/docmind` | PostgreSQL connection string |
 | `REDIS_HOST` | string | `localhost` | Redis server hostname |
 | `REDIS_PORT` | number | `6379` | Redis server port |
@@ -1195,10 +1339,10 @@ DocMind features a comprehensive automated testing suite covering unit, utility,
 ### Running Tests
 
 ```bash
-# Run unit & integration test suites
+# Run all unit & integration test suites (122 tests)
 npm test
 
-# Run end-to-end (E2E) tests against simulated HTTP application
+# Run end-to-end (E2E) tests against simulated HTTP application (41 tests)
 npm run test:e2e
 
 # Run test coverage report
@@ -1206,6 +1350,9 @@ npm run test:cov
 
 # Run linter checks
 npm run lint
+
+# Check code formatting
+npm run format:check
 ```
 
 ### Test Suite Breakdown
@@ -1218,12 +1365,13 @@ npm run lint
 | **Ingestion Events Service** | `src/ingestion/ingestion-events.service.spec.ts` | Unit | 5 | In-memory event dispatching, multiple listener registrations, unsubscribing on disconnect, and optional Redis PubSub publishing. |
 | **Ingestion Queue Processor** | `src/ingestion/ingestion.processor.spec.ts` | Unit | 3 | BullMQ job processing, job progress updates, and real-time event broadcasting across CHUNKING (25%), EMBEDDING (50%-90%), READY (100%), and terminal FAILED. |
 | **Chunking Logic** | `src/ingestion/chunking.util.spec.ts` | Unit | 14 | Word-boundary preservation, sliding window overlap, edge cases (empty text, small text, large paragraphs, consecutive whitespace). |
-| **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | 6 | Instant sub-millisecond Redis cache hits, cache misses invoking vector search & OpenAI chat completions, Prometheus histogram timers and query counters. |
+| **Workspaces Service** | `src/workspaces/workspaces.service.spec.ts` | Unit | 6 | Multi-tenant workspace creation, slug generation, crypto-secure API key issuance, uniqueness constraints, and tenant lookups. |
+| **RAG Answer Service** | `src/query/answer.service.spec.ts` | Unit | 7 | Instant sub-millisecond Redis cache hits, cross-tenant cache key partitioning, cache misses invoking vector search & OpenAI chat completions. |
 | **RAG Answer Streaming** | `src/query/answer-stream.spec.ts` | Unit | 5 | Token-by-token streaming, incremental delta emission, cache hits without LLM invocation, fallback handling on empty vector results, client unsubscribe abort cleanup, and error propagation. |
-| **Hybrid & Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 6 | Dense vector cosine similarity (`<->`), full-text search (`ts_rank_cd`), and hybrid CTE query with Reciprocal Rank Fusion (RRF). |
-| **Chat Service (Conversational Memory)** | `src/chat/chat.service.spec.ts` | Unit | 13 | Multi-turn session creation, pagination, query reformulation via LLM, hybrid retrieval integration, message persistence, and token-by-token SSE streaming. |
+| **Hybrid & Vector Search Service** | `src/query/query.service.spec.ts` | Unit | 6 | Dense vector cosine similarity (`<->`), full-text search (`ts_rank_cd`), and hybrid CTE query with Reciprocal Rank Fusion (RRF) and tenant isolation partition filters. |
+| **Chat Service (Conversational Memory)** | `src/chat/chat.service.spec.ts` | Unit | 16 | Multi-turn session creation, workspace scoping, query reformulation via LLM, hybrid retrieval integration bounded to workspace, message persistence, and token-by-token SSE streaming. |
 | **Chat Controller** | `src/chat/chat.controller.spec.ts` | Unit | 7 | Controller routing, UUID parameters, HTTP status codes, message sending, and GET/POST SSE streaming subscriptions. |
-| **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | 10 | `x-api-key` and `Authorization: Bearer` extraction, `@Public()` route bypass, dev mode fallback, HTTP 401 Unauthorized rejection on invalid keys. |
+| **API Key Guard** | `src/auth/guards/api-key.guard.spec.ts` | Unit | 11 | Super Admin master key, workspace-scoped API keys, cross-tenant spoofing prevention (`403 Forbidden`), `@Public()` route bypass, and dev mode fallback. |
 | **Health Controller** | `src/health/health.controller.spec.ts` | Unit | 5 | Active DB and Redis ping reporting, HTTP 200 OK on healthy components, HTTP 503 Service Unavailable upon dependency outage. |
 | **Exception Filter** | `src/common/filters/all-exceptions.filter.spec.ts` | Unit | 6 | Unified JSON error responses, validation array extraction, masking internal errors as HTTP 500 while logging full stack traces. |
 | **App Controller** | `src/app.controller.spec.ts` | Unit | 1 | Root `/` route sanity test. |
@@ -1231,9 +1379,10 @@ npm run lint
 | **Documents Pipeline E2E** | `test/documents.e2e-spec.ts` | E2E | 19 | Full HTTP lifecycle for raw text ingestion, multipart file uploads (`.pdf`, `.docx`, `.txt`), paginated document listing with metadata, cascade deletion, and live SSE progress streaming (`text/event-stream`). |
 | **RAG Streaming E2E** | `test/query-stream.e2e-spec.ts` | E2E | 5 | Full HTTP lifecycle for `GET /query/ask/stream` and `POST /query/ask/stream`, verifying `text/event-stream` headers, typed event emission sequence (`sources`, `token`, `done`), parameter validation, and error filters. |
 | **Chat & Memory E2E** | `test/chat.e2e-spec.ts` | E2E | 8 | Full HTTP lifecycle for chat session CRUD, multi-turn messages with query contextualization, parameter validation, and live SSE conversational streaming. |
+| **Multi-Tenancy Isolation E2E** | `test/workspace-isolation.e2e-spec.ts` | E2E | 7 | End-to-end workspace creation, tenant document ingestion, isolated query partition routing, and 403 Forbidden cross-tenant spoofing rejection. |
 
 > [!NOTE]
-> All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost. Total: **111 unit tests** + **34 E2E tests** = **145 passing tests**.
+> All unit and E2E suites leverage pure ESM mock mappings (`src/__mocks__/`) to execute hermetically in sub-4 seconds without requiring live database or Redis infrastructure on localhost. Total: **122 unit tests** + **41 E2E tests** = **163 passing tests**.
 
 ### CI/CD Pipeline (GitHub Actions)
 
@@ -1248,7 +1397,7 @@ flowchart LR
     C --> D[Install Deps: npm ci]
     D --> E[Linting: npm run lint]
     E --> F[Format Check: prettier --check .]
-    F --> G[Run pgvector Migrations]
+    F --> G[Run pgvector & Schema Migrations]
     G --> H[Unit & E2E Tests + Coverage]
     H --> I[Application Build: npm run build]
     I --> J[Docker Build Verification]
@@ -1265,7 +1414,7 @@ flowchart LR
 | **3. Install Deps** | `npm ci` | Deterministic, clean installation of exact package tree from `package-lock.json`. |
 | **4. Code Linting** | `npm run lint` | Validates TypeScript rules, naming conventions, and code hygiene via ESLint. |
 | **5. Format Check** | `npx prettier --check .` | Verifies consistent code style across the codebase according to `.prettierrc`. |
-| **6. DB Migrations** | `npx ts-node src/migrations/run-pgvector.ts` | Applies pgvector extension, chunks schema, and `ivfflat` index on PostgreSQL 16. |
+| **6. DB Migrations** | `npm run migration:run && npm run migration:hybrid` | Applies pgvector extension, chunks schema, and `ivfflat` index on PostgreSQL 16. |
 | **7. Tests & Coverage** | `npm run test:cov && npm run test:e2e` | Executes 100% of unit and end-to-end integration tests, generating coverage reports. |
 | **8. App Build** | `npm run build` | Compiles NestJS TypeScript into production-ready JavaScript bundle in `dist/`. |
 | **9. Docker Build** | `docker build -t docmind-test .` | Validates multi-stage Dockerfile build, asset bundling, and runner image creation. |
@@ -1293,14 +1442,16 @@ cd Docmind
 
 # 2. Configure environment variables
 cp .env.example .env
-# Edit .env and supply your OPENAI_API_KEY
+# Edit .env and supply your OPENAI_API_KEY and API_KEY
 
 # 3. Build & start all containers (API, PostgreSQL with pgvector, Redis)
 docker compose up --build -d
 
-# 4. Run vector extension & hybrid search index migrations
-npx ts-node src/migrations/run-pgvector.ts
-npx ts-node src/migrations/run-hybrid-migration.ts
+# 4. Run database migrations (pgvector, hybrid FTS, chat, and workspaces)
+npm run migration:run
+npm run migration:hybrid
+npm run migration:chat
+npm run migration:workspaces
 ```
 
 ---
@@ -1315,16 +1466,18 @@ npm install
 
 # 2. Configure Environment
 cp .env.example .env
-# Edit .env and supply your OPENAI_API_KEY
+# Edit .env and supply your OPENAI_API_KEY and API_KEY
 
 # 3. Start Infrastructure Dependencies
 docker compose up -d postgres redis
 
-# 4. Run Vector & Hybrid Search Migrations
-npx ts-node src/migrations/run-pgvector.ts
-npx ts-node src/migrations/run-hybrid-migration.ts
+# 4. Run Database Migrations
+npm run migration:run
+npm run migration:hybrid
+npm run migration:chat
+npm run migration:workspaces
 
-# 5. Start Application
+# 5. Start Application in Development Watch Mode
 npm run start:dev
 ```
 
@@ -1334,48 +1487,62 @@ npm run start:dev
 |:---|:---|
 | `http://localhost:3000` | API Server |
 | `http://localhost:3000/api/docs` | Interactive Swagger UI |
-| `http://localhost:3000/health` | Health Check (DB & Redis) |
-| `http://localhost:3000/metrics` | Prometheus Metrics |
+| `http://localhost:3000/health` | Health Check Probe (DB & Redis) |
+| `http://localhost:3000/metrics` | Prometheus Metrics Exposition |
 | `http://localhost:3000/query/ask/stream` | Real-Time RAG Answer Streaming (SSE) |
+| `http://localhost:3000/chat/sessions/:id/messages/stream` | Conversational Chat Streaming (SSE) |
 
 ---
 
 ### Quick Testing (cURL Examples)
 
 ```bash
-# 1. Upload a document file (PDF, DOCX, TXT)
+# 1. Provision a tenant workspace (returns scoped API key dcm_ws_...)
+curl -X POST http://localhost:3000/workspaces \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-master-api-key" \
+  -d '{"name": "Engineering Team", "slug": "engineering"}'
+
+# 2. Upload a document file (PDF, DOCX, TXT) into workspace
 curl -X POST http://localhost:3000/documents/upload \
-  -H "x-api-key: your-secret-api-key" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -F "file=@./whitepaper.pdf" \
   -F "title=Whitepaper Architecture"
 
-# 2. Ingest raw text document
-curl -X POST http://localhost:3000/documents \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: your-secret-api-key" \
-  -d '{"title": "DocMind Architecture", "content": "DocMind is an asynchronous RAG backend built on NestJS..."}'
-
 # 3. Stream document ingestion progress in real-time (SSE)
 curl -N -H "Accept: text/event-stream" \
-  -H "x-api-key: your-secret-api-key" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   http://localhost:3000/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b/progress
 
 # 4. Hybrid vector & full-text search with RRF scoring
 curl -X POST http://localhost:3000/query/search \
   -H "Content-Type: application/json" \
-  -H "x-api-key: your-secret-api-key" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -d '{"query": "How does DocMind handle background processing?", "limit": 3, "mode": "hybrid"}'
 
 # 5. Grounded RAG Q&A with citations (Synchronous)
 curl -X POST http://localhost:3000/query/ask \
   -H "Content-Type: application/json" \
-  -H "x-api-key: your-secret-api-key" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -d '{"query": "How does DocMind handle background processing?"}'
 
 # 6. Stream grounded RAG Q&A response token-by-token in real-time (SSE)
 curl -N -H "Accept: text/event-stream" \
-  -H "x-api-key: your-secret-api-key" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   "http://localhost:3000/query/ask/stream?query=How+does+DocMind+handle+background+processing%3F"
+
+# 7. Create a multi-turn chat session
+curl -X POST http://localhost:3000/chat/sessions \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
+  -d '{"title": "Architecture Q&A"}'
+
+# 8. Stream conversational message with query reformulation (SSE)
+curl -N -X POST http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
+  -d '{"content": "What is its default chunk size?", "mode": "hybrid", "limit": 3}'
 ```
 
 ---
@@ -1394,13 +1561,14 @@ docmind/
 ├── .prettierrc                     # Prettier styling standards
 ├── package.json
 ├── tsconfig.json
-├── test/                           # E2E Test suites & configurations (34 tests)
+├── test/                           # E2E Test suites & configurations (41 tests)
 │   ├── app.e2e-spec.ts             # Health, metrics & filter E2E tests
 │   ├── documents.e2e-spec.ts       # Text ingestion, file upload, pagination, deletion & SSE E2E tests
 │   ├── query-stream.e2e-spec.ts    # Token-by-token SSE streaming RAG Q&A E2E tests
 │   ├── chat.e2e-spec.ts            # Conversational memory, multi-turn RAG & SSE streaming E2E tests
+│   ├── workspace-isolation.e2e-spec.ts # Multi-tenancy isolation & cross-tenant security E2E tests
 │   └── jest-e2e.json               # E2E Jest configuration with ESM module mapping
-├── src/                            # Application source & unit tests (111 tests)
+├── src/                            # Application source & unit tests (122 tests)
 │   ├── main.ts                     # Bootstrap, Swagger, Winston Logger, Filters & Validation
 │   ├── app.module.ts               # Root module (TypeORM, Redis, BullMQ, Throttler, Prometheus, Health)
 │   ├── __mocks__/                  # Pure ESM module mappings for high-speed isolated testing
@@ -1413,8 +1581,16 @@ docmind/
 │   │   ├── decorators/
 │   │   │   └── public.decorator.ts # @Public() bypass decorator
 │   │   └── guards/
-│   │       ├── api-key.guard.ts    # Dual-header API key validator & dev bypass
+│   │       ├── api-key.guard.ts    # Dual-header API key validator & multi-tenant scope resolver
 │   │       └── api-key.guard.spec.ts
+│   ├── workspaces/                 # Multi-tenancy & workspace access control (RBAC)
+│   │   ├── workspace.entity.ts     # Workspace entity (UUID, name, slug, apiKey, timestamps)
+│   │   ├── workspaces.controller.ts# Workspace CRUD & tenant registration endpoints
+│   │   ├── workspaces.service.ts   # Workspace provisioning & crypto key generation
+│   │   ├── workspaces.service.spec.ts # Workspace unit tests
+│   │   ├── workspaces.module.ts
+│   │   └── dto/
+│   │       └── create-workspace.dto.ts
 │   ├── common/
 │   │   ├── dto/                    # Reusable DTOs
 │   │   │   ├── pagination.dto.ts   # Pagination query validation DTO (page, limit, order)
@@ -1431,7 +1607,8 @@ docmind/
 │   ├── migrations/
 │   │   ├── run-pgvector.ts         # pgvector extension, ivfflat index & tsvector migration
 │   │   ├── run-hybrid-migration.ts # Full-text search tsvector generated column & GIN index migration
-│   │   └── run-chat-migration.ts   # Chat sessions and messages tables and index migration
+│   │   ├── run-chat-migration.ts   # Chat sessions and messages tables and index migration
+│   │   └── run-workspaces-migration.ts # Workspaces table and workspaceId relation migration
 │   ├── documents/
 │   │   ├── document.entity.ts      # Document entity & lifecycle status enum
 │   │   ├── chunk.entity.ts         # Chunk entity with vector(1536) and tsvector columns
@@ -1469,9 +1646,9 @@ docmind/
 │   │       └── search-query.dto.ts # Query validation DTO with retrieval mode & Type transformation
 │   ├── chat/
 │   │   ├── chat.controller.ts      # Multi-turn chat sessions & conversational SSE endpoints
-│   │   ├── chat.controller.spec.ts # Controller unit tests (100% path coverage)
+│   │   ├── chat.controller.spec.ts # Controller unit tests
 │   │   ├── chat.service.ts         # Session lifecycle, query reformulation & conversational RAG pipeline
-│   │   ├── chat.service.spec.ts    # Service unit tests (100% path coverage)
+│   │   ├── chat.service.spec.ts    # Service unit tests
 │   │   ├── chat.module.ts          # Chat module registering TypeORM entities and QueryModule
 │   │   ├── entities/
 │   │   │   ├── chat-session.entity.ts # Chat session entity (UUID, title, workspaceId, timestamps)

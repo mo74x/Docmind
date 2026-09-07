@@ -48,10 +48,13 @@ describe('ChatController', () => {
     const mockSession = { id: 'sess-1', title: 'New Chat' };
     chatServiceMock.createSession.mockResolvedValue(mockSession);
 
-    const result = await controller.createSession({ title: 'New Chat' });
-    expect(chatServiceMock.createSession).toHaveBeenCalledWith({
-      title: 'New Chat',
-    });
+    const result = await controller.createSession({ title: 'New Chat' }, null);
+    expect(chatServiceMock.createSession).toHaveBeenCalledWith(
+      {
+        title: 'New Chat',
+      },
+      null,
+    );
     expect(result).toEqual(mockSession);
   });
 
@@ -59,16 +62,22 @@ describe('ChatController', () => {
     const mockList = { data: [{ id: 'sess-1' }], meta: { totalItems: 1 } };
     chatServiceMock.listSessions.mockResolvedValue(mockList);
 
-    const result = await controller.listSessions({
-      page: 1,
-      limit: 10,
-      order: 'DESC',
-    });
-    expect(chatServiceMock.listSessions).toHaveBeenCalledWith({
-      page: 1,
-      limit: 10,
-      order: 'DESC',
-    });
+    const result = await controller.listSessions(
+      {
+        page: 1,
+        limit: 10,
+        order: 'DESC',
+      },
+      null,
+    );
+    expect(chatServiceMock.listSessions).toHaveBeenCalledWith(
+      {
+        page: 1,
+        limit: 10,
+        order: 'DESC',
+      },
+      null,
+    );
     expect(result).toEqual(mockList);
   });
 
@@ -76,9 +85,10 @@ describe('ChatController', () => {
     const mockSession = { id: 'sess-1', messages: [] };
     chatServiceMock.getSessionWithMessages.mockResolvedValue(mockSession);
 
-    const result = await controller.getSession('sess-1');
+    const result = await controller.getSession('sess-1', null);
     expect(chatServiceMock.getSessionWithMessages).toHaveBeenCalledWith(
       'sess-1',
+      null,
     );
     expect(result).toEqual(mockSession);
   });
@@ -86,8 +96,8 @@ describe('ChatController', () => {
   it('should delete a session', async () => {
     chatServiceMock.deleteSession.mockResolvedValue(undefined);
 
-    const result = await controller.deleteSession('sess-1');
-    expect(chatServiceMock.deleteSession).toHaveBeenCalledWith('sess-1');
+    const result = await controller.deleteSession('sess-1', null);
+    expect(chatServiceMock.deleteSession).toHaveBeenCalledWith('sess-1', null);
     expect(result).toEqual({
       message: 'Chat session deleted successfully',
       id: 'sess-1',
@@ -104,10 +114,18 @@ describe('ChatController', () => {
     };
     chatServiceMock.sendMessage.mockResolvedValue(mockResponse);
 
-    const result = await controller.sendMessage('sess-1', { content: 'hello' });
-    expect(chatServiceMock.sendMessage).toHaveBeenCalledWith('sess-1', {
-      content: 'hello',
-    });
+    const result = await controller.sendMessage(
+      'sess-1',
+      { content: 'hello' },
+      null,
+    );
+    expect(chatServiceMock.sendMessage).toHaveBeenCalledWith(
+      'sess-1',
+      {
+        content: 'hello',
+      },
+      null,
+    );
     expect(result).toEqual(mockResponse);
   });
 
@@ -119,9 +137,13 @@ describe('ChatController', () => {
     ];
     chatServiceMock.sendMessageStream.mockReturnValue(of(...mockEvents));
 
-    const observable = controller.sendMessageStreamGet('sess-1', {
-      content: 'hello',
-    });
+    const observable = controller.sendMessageStreamGet(
+      'sess-1',
+      {
+        content: 'hello',
+      },
+      null,
+    );
     const collected: any[] = [];
     observable.subscribe({
       next: (val) => collected.push(val),
@@ -148,7 +170,12 @@ describe('ChatController', () => {
       on: jest.fn(),
     } as unknown as Response;
 
-    controller.sendMessageStreamPost('sess-1', { content: 'query' }, resMock);
+    controller.sendMessageStreamPost(
+      'sess-1',
+      { content: 'query' },
+      resMock,
+      null,
+    );
 
     expect(resMock.setHeader).toHaveBeenCalledWith(
       'Content-Type',

@@ -57,19 +57,26 @@ describe('DocumentsController', () => {
 
   describe('ingest', () => {
     it('should submit document via service and return 201 formatted response', async () => {
-      const result = await controller.ingest({
-        title: 'New Doc',
-        content: 'Content text',
-      });
+      const result = await controller.ingest(
+        {
+          title: 'New Doc',
+          content: 'Content text',
+        },
+        null,
+      );
 
-      expect(service.submitDocument).toHaveBeenCalledWith({
-        title: 'New Doc',
-        content: 'Content text',
-      });
+      expect(service.submitDocument).toHaveBeenCalledWith(
+        {
+          title: 'New Doc',
+          content: 'Content text',
+        },
+        null,
+      );
       expect(result).toEqual({
         message: 'Document queued for ingestion',
         id: 'mock-doc-uuid',
         status: DocumentStatus.PENDING,
+        workspaceId: undefined,
       });
     });
   });
@@ -77,7 +84,11 @@ describe('DocumentsController', () => {
   describe('uploadFile', () => {
     it('should throw BadRequestException if file is missing', async () => {
       await expect(
-        controller.uploadFile(undefined as unknown as Express.Multer.File, {}),
+        controller.uploadFile(
+          undefined as unknown as Express.Multer.File,
+          {},
+          null,
+        ),
       ).rejects.toThrow(new BadRequestException('File is required'));
     });
 
@@ -89,18 +100,27 @@ describe('DocumentsController', () => {
         size: 32,
       } as Express.Multer.File;
 
-      const result = await controller.uploadFile(mockFile, {
-        title: 'Custom Title Override',
-      });
+      const result = await controller.uploadFile(
+        mockFile,
+        {
+          title: 'Custom Title Override',
+        },
+        null,
+      );
 
-      expect(service.submitDocument).toHaveBeenCalledWith({
-        title: 'Custom Title Override',
-        content: 'DocMind whitepaper text content',
-      });
+      expect(service.submitDocument).toHaveBeenCalledWith(
+        {
+          title: 'Custom Title Override',
+          content: 'DocMind whitepaper text content',
+          workspaceId: null,
+        },
+        null,
+      );
       expect(result).toEqual({
         message: 'Document uploaded and queued for ingestion',
         id: 'mock-doc-uuid',
         status: DocumentStatus.PENDING,
+        workspaceId: undefined,
       });
     });
 
@@ -112,36 +132,51 @@ describe('DocumentsController', () => {
         size: 23,
       } as Express.Multer.File;
 
-      const result = await controller.uploadFile(mockFile, {});
+      const result = await controller.uploadFile(mockFile, {}, null);
 
-      expect(service.submitDocument).toHaveBeenCalledWith({
-        title: 'sample_notes',
-        content: 'Extracted notes content',
-      });
+      expect(service.submitDocument).toHaveBeenCalledWith(
+        {
+          title: 'sample_notes',
+          content: 'Extracted notes content',
+          workspaceId: null,
+        },
+        null,
+      );
       expect(result).toEqual({
         message: 'Document uploaded and queued for ingestion',
         id: 'mock-doc-uuid',
         status: DocumentStatus.PENDING,
+        workspaceId: undefined,
       });
     });
   });
 
   describe('findAll', () => {
     it('should delegate to documentsService.findAll', async () => {
-      const result = await controller.findAll({
-        page: 1,
-        limit: 10,
-        order: 'DESC',
-      });
-      expect(service.findAll).toHaveBeenCalled();
+      const result = await controller.findAll(
+        {
+          page: 1,
+          limit: 10,
+          order: 'DESC',
+        },
+        null,
+      );
+      expect(service.findAll).toHaveBeenCalledWith(
+        {
+          page: 1,
+          limit: 10,
+          order: 'DESC',
+        },
+        null,
+      );
       expect(result.data).toHaveLength(1);
     });
   });
 
   describe('findOne', () => {
     it('should retrieve a document by ID', async () => {
-      const result = await controller.findOne('mock-doc-uuid');
-      expect(service.findOne).toHaveBeenCalledWith('mock-doc-uuid');
+      const result = await controller.findOne('mock-doc-uuid', null);
+      expect(service.findOne).toHaveBeenCalledWith('mock-doc-uuid', null);
       expect(result.id).toBe('mock-doc-uuid');
     });
   });
@@ -160,8 +195,8 @@ describe('DocumentsController', () => {
 
   describe('remove', () => {
     it('should delete a document and return confirmation', async () => {
-      const result = await controller.remove('mock-doc-uuid');
-      expect(service.remove).toHaveBeenCalledWith('mock-doc-uuid');
+      const result = await controller.remove('mock-doc-uuid', null);
+      expect(service.remove).toHaveBeenCalledWith('mock-doc-uuid', null);
       expect(result.id).toBe('mock-doc-uuid');
     });
   });

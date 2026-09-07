@@ -85,9 +85,15 @@ export class IngestionProcessor extends WorkerHost {
 
           // Execute native parameterized query
           await this.dataSource.query(
-            `INSERT INTO chunks ("documentId", "chunkIndex", "content", "embedding") 
-             VALUES ($1, $2, $3, $4)`,
-            [document.id, chunkIndex, content, pgVectorString],
+            `INSERT INTO chunks ("documentId", "chunkIndex", "content", "embedding", "workspaceId") 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+              document.id,
+              chunkIndex,
+              content,
+              pgVectorString,
+              document.workspaceId ?? null,
+            ],
           );
         }
 

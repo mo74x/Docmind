@@ -10,6 +10,7 @@ import { Document, DocumentStatus } from './document.entity';
 import { Chunk } from './chunk.entity';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
 import { IngestionEventsService } from '../ingestion/ingestion-events.service';
+import { PaginationDto } from '../common/dto/pagination.dto';
 
 describe('DocumentsService', () => {
   let service: DocumentsService;
@@ -106,6 +107,7 @@ describe('DocumentsService', () => {
         status: DocumentStatus.PENDING,
         failureReason: null,
         createdAt: new Date('2026-09-06T08:00:00Z'),
+        workspaceId: null,
       };
 
       documentRepoMock.create.mockReturnValue(mockCreatedEntity);
@@ -117,12 +119,32 @@ describe('DocumentsService', () => {
       expect(documentRepoMock.create).toHaveBeenCalledWith({
         title: dto.title,
         sourceContent: dto.content,
+        workspaceId: null,
       });
       expect(documentRepoMock.save).toHaveBeenCalledWith(mockCreatedEntity);
       expect(ingestionQueueMock.add).toHaveBeenCalledWith('ingest-doc', {
         documentId: mockSavedEntity.id,
       });
       expect(result).toEqual(mockSavedEntity);
+    });
+
+    it('should assign workspaceId when provided in submitDocument', async () => {
+      const dto: IngestDocumentDto = {
+        title: 'Workspace Document',
+        content: 'Content for specific workspace.',
+        workspaceId: 'ws-team-1',
+      };
+      documentRepoMock.create.mockReturnValue({ ...dto });
+      documentRepoMock.save.mockResolvedValue({ id: 'doc-ws-1', ...dto });
+      ingestionQueueMock.add.mockResolvedValue({ id: 'job-ws' });
+
+      await service.submitDocument(dto, 'ws-override-2');
+
+      expect(documentRepoMock.create).toHaveBeenCalledWith({
+        title: dto.title,
+        sourceContent: dto.content,
+        workspaceId: 'ws-override-2',
+      });
     });
   });
 
@@ -150,6 +172,7 @@ describe('DocumentsService', () => {
       const result = await service.findAll();
 
       expect(documentRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: undefined,
         skip: 0,
         take: 10,
         order: { createdAt: 'DESC' },
@@ -157,6 +180,7 @@ describe('DocumentsService', () => {
           id: true,
           title: true,
           status: true,
+          workspaceId: true,
           createdAt: true,
           failureReason: true,
         },
@@ -183,6 +207,7 @@ describe('DocumentsService', () => {
       });
 
       expect(documentRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: undefined,
         skip: 5,
         take: 5,
         order: { createdAt: 'ASC' },
@@ -190,6 +215,7 @@ describe('DocumentsService', () => {
           id: true,
           title: true,
           status: true,
+          workspaceId: true,
           createdAt: true,
           failureReason: true,
         },
@@ -205,6 +231,18 @@ describe('DocumentsService', () => {
         hasPreviousPage: true,
       });
     });
+
+    it('should filter documents by workspaceId when provided', async () => {
+      documentRepoMock.findAndCount.mockResolvedValue([mockDocuments, 2]);
+
+      await service.findAll(new PaginationDto(), 'ws-team-1');
+
+      expect(documentRepoMock.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { workspaceId: 'ws-team-1' },
+        }),
+      );
+    });
   });
 
   describe('findOne', () => {
@@ -214,6 +252,7 @@ describe('DocumentsService', () => {
         title: 'Single Document',
         sourceContent: 'Detailed content',
         status: DocumentStatus.READY,
+        workspaceId: null,
         failureReason: null,
         createdAt: new Date('2026-09-06T08:00:00Z'),
       };
@@ -241,6 +280,23 @@ describe('DocumentsService', () => {
         id: 'non-existent-id',
       });
     });
+
+    it('should throw NotFoundException when document workspaceId does not match requested workspace', async () => {
+      const mockDocument: Document = {
+        id: 'doc-uuid-123',
+        title: 'Single Document',
+        sourceContent: 'Detailed content',
+        status: DocumentStatus.READY,
+        workspaceId: 'workspace-a',
+        failureReason: null,
+        createdAt: new Date('2026-09-06T08:00:00Z'),
+      };
+      documentRepoMock.findOneBy.mockResolvedValue(mockDocument);
+
+      await expect(
+        service.findOne('doc-uuid-123', 'workspace-b'),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
 
   describe('remove', () => {
@@ -253,6 +309,7 @@ describe('DocumentsService', () => {
         status: DocumentStatus.READY,
         failureReason: null,
         createdAt: new Date('2026-09-06T08:00:00Z'),
+        workspaceId: null,
       };
 
       documentRepoMock.findOneBy.mockResolvedValue(mockDocument);
@@ -315,6 +372,7 @@ describe('DocumentsService', () => {
       status: DocumentStatus.PENDING,
       failureReason: null,
       createdAt: new Date(),
+      workspaceId: null,
     };
 
     it('should immediately emit current document status and relay live progress updates', (done) => {

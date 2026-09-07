@@ -68,22 +68,31 @@ export class AnswerService {
       this.configService.get<string>('openai.chatModel') || 'gpt-4o-mini';
   }
 
-  async askQuestion(dto: SearchQueryDto): Promise<AnswerResponse> {
+  async askQuestion(
+    dto: SearchQueryDto,
+    workspaceId?: string | null,
+  ): Promise<AnswerResponse> {
+    const effectiveWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
     this.queriesCounter.inc();
-    const cacheKey = this.generateCacheKey(dto.query);
+    const cacheKey = this.generateCacheKey(dto.query, effectiveWorkspaceId);
     const cachedResponse = await this.redis.get(cacheKey);
 
     if (cachedResponse) {
-      this.logger.log(`Cache HIT for query: "${dto.query}"`);
+      this.logger.log(
+        `Cache HIT for query: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'})`,
+      );
       this.cacheHitsCounter.inc();
       return JSON.parse(cachedResponse) as AnswerResponse;
     }
 
     this.logger.log(
-      `Cache MISS for query: "${dto.query}". Running pipeline...`,
+      `Cache MISS for query: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'}). Running pipeline...`,
     );
 
-    const searchResults = await this.queryService.search(dto);
+    const searchResults = await this.queryService.search(
+      dto,
+      effectiveWorkspaceId,
+    );
     const endTimer = this.generationTimer.startTimer();
 
     if (!searchResults.length) {
@@ -141,17 +150,23 @@ export class AnswerService {
   /**
    * Stream RAG answer token-by-token via Server-Sent Events (SSE).
    */
-  askQuestionStream(dto: SearchQueryDto): Observable<MessageEvent> {
+  askQuestionStream(
+    dto: SearchQueryDto,
+    workspaceId?: string | null,
+  ): Observable<MessageEvent> {
+    const effectiveWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
     return new Observable<MessageEvent>((subscriber) => {
       let isAborted = false;
 
       const runPipeline = async () => {
         this.queriesCounter.inc();
-        const cacheKey = this.generateCacheKey(dto.query);
+        const cacheKey = this.generateCacheKey(dto.query, effectiveWorkspaceId);
         const cachedResponse = await this.redis.get(cacheKey);
 
         if (cachedResponse) {
-          this.logger.log(`Cache HIT (stream) for query: "${dto.query}"`);
+          this.logger.log(
+            `Cache HIT (stream) for query: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'})`,
+          );
           this.cacheHitsCounter.inc();
           const parsed = JSON.parse(cachedResponse) as AnswerResponse;
 
@@ -181,10 +196,13 @@ export class AnswerService {
         }
 
         this.logger.log(
-          `Cache MISS (stream) for query: "${dto.query}". Running streaming pipeline...`,
+          `Cache MISS (stream) for query: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'}). Running streaming pipeline...`,
         );
 
-        const searchResults = await this.queryService.search(dto);
+        const searchResults = await this.queryService.search(
+          dto,
+          effectiveWorkspaceId,
+        );
         const endTimer = this.generationTimer.startTimer();
 
         if (isAborted) {
@@ -310,7 +328,7 @@ export class AnswerService {
    * Normalizes the string to handle "similar" phrasing constraints like
    * capitalization, extra spaces, and trailing punctuation.
    */
-  private generateCacheKey(query: string): string {
+  private generateCacheKey(query: string, workspaceId?: string | null): string {
     const normalized = query
       .toLowerCase()
       .replace(/[^\w\s]/g, '') // Remove all punctuation
@@ -319,6 +337,7 @@ export class AnswerService {
 
     // Hash the normalized string to ensure a safe, fixed-length Redis key
     const hash = crypto.createHash('sha256').update(normalized).digest('hex');
-    return `docmind:cache:ask:${hash}`;
+    const wsPrefix = workspaceId || 'global';
+    return `docmind:cache:ask:${wsPrefix}:${hash}`;
   }
 }

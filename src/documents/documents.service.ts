@@ -26,11 +26,15 @@ export class DocumentsService {
     private readonly ingestionEventsService: IngestionEventsService,
   ) {}
 
-  async submitDocument(dto: IngestDocumentDto): Promise<Document> {
+  async submitDocument(
+    dto: IngestDocumentDto,
+    workspaceId?: string | null,
+  ): Promise<Document> {
     // Save document to DB
     const document = this.documentRepo.create({
       title: dto.title,
       sourceContent: dto.content,
+      workspaceId: workspaceId ?? dto.workspaceId ?? null,
     });
     const savedDocument = await this.documentRepo.save(document);
 
@@ -44,13 +48,17 @@ export class DocumentsService {
 
   async findAll(
     dto: PaginationDto = new PaginationDto(),
+    workspaceId?: string | null,
   ): Promise<PaginatedResponseDto<Document>> {
     const page = dto.page || 1;
     const limit = dto.limit || 10;
     const order = dto.order || 'DESC';
     const skip = (page - 1) * limit;
 
+    const whereCondition = workspaceId ? { workspaceId } : undefined;
+
     const [data, totalItems] = await this.documentRepo.findAndCount({
+      where: whereCondition,
       skip,
       take: limit,
       order: { createdAt: order },
@@ -58,6 +66,7 @@ export class DocumentsService {
         id: true,
         title: true,
         status: true,
+        workspaceId: true,
         createdAt: true,
         failureReason: true,
       },
@@ -66,16 +75,22 @@ export class DocumentsService {
     return new PaginatedResponseDto(data, totalItems, page, limit);
   }
 
-  async findOne(id: string): Promise<Document> {
+  async findOne(id: string, workspaceId?: string | null): Promise<Document> {
     const document = await this.documentRepo.findOneBy({ id });
     if (!document) {
+      throw new NotFoundException(`Document with ID ${id} not found`);
+    }
+    if (workspaceId && document.workspaceId !== workspaceId) {
       throw new NotFoundException(`Document with ID ${id} not found`);
     }
     return document;
   }
 
-  async remove(id: string): Promise<{ message: string; id: string }> {
-    const document = await this.findOne(id);
+  async remove(
+    id: string,
+    workspaceId?: string | null,
+  ): Promise<{ message: string; id: string }> {
+    const document = await this.findOne(id, workspaceId);
     await this.chunkRepo.delete({ documentId: id });
     await this.documentRepo.delete(id);
     return {

@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('chunks')
@@ -12,6 +13,10 @@ export class Chunk {
 
   @Column({ type: 'uuid' })
   documentId: string;
+
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  workspaceId: string | null;
 
   @Column({ type: 'int' })
   chunkIndex: number;

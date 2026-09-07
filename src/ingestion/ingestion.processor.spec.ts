@@ -20,6 +20,7 @@ describe('IngestionProcessor', () => {
     status: DocumentStatus.PENDING,
     failureReason: null,
     createdAt: new Date(),
+    workspaceId: null,
   };
 
   beforeEach(() => {
@@ -164,5 +165,26 @@ describe('IngestionProcessor', () => {
       message: 'Document ingestion failed',
       error: 'OpenAI API failure',
     });
+  });
+
+  it('should propagate workspaceId from document to chunks during storage', async () => {
+    mockDocumentRepo.findOneBy.mockResolvedValue({
+      ...mockDocument,
+      workspaceId: 'ws-tenant-alpha',
+    });
+
+    const job: any = {
+      data: { documentId: 'doc-uuid-1' },
+      updateProgress: jest.fn().mockResolvedValue(undefined),
+      opts: { attempts: 3 },
+      attemptsMade: 0,
+    };
+
+    await processor.process(job);
+
+    expect(mockDataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining('"workspaceId"'),
+      expect.arrayContaining(['ws-tenant-alpha']),
+    );
   });
 });

@@ -113,14 +113,18 @@ describe('AnswerService', () => {
     jest.clearAllMocks();
   });
 
-  const getExpectedCacheKey = (query: string): string => {
+  const getExpectedCacheKey = (
+    query: string,
+    workspaceId?: string | null,
+  ): string => {
     const normalized = query
       .toLowerCase()
       .replace(/[^\w\s]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
     const hash = crypto.createHash('sha256').update(normalized).digest('hex');
-    return `docmind:cache:ask:${hash}`;
+    const ws = workspaceId || 'global';
+    return `docmind:cache:ask:${ws}:${hash}`;
   };
 
   describe('Cache Hit', () => {
@@ -182,6 +186,37 @@ describe('AnswerService', () => {
       expect(redisMock.get).toHaveBeenCalledWith(expectedKey);
       expect(cacheHitsCounterMock.inc).toHaveBeenCalledTimes(1);
     });
+
+    it('should partition cache keys by workspaceId to prevent cross-tenant cache leaks', async () => {
+      const dtoA: SearchQueryDto = {
+        query: 'What is our secret revenue?',
+        workspaceId: 'workspace-alpha',
+      };
+      const keyA = getExpectedCacheKey(dtoA.query, 'workspace-alpha');
+
+      redisMock.get.mockResolvedValue(
+        JSON.stringify({
+          query: dtoA.query,
+          answer: 'Workspace Alpha secret revenue is $10M.',
+          sources: [],
+          isCached: true,
+        }),
+      );
+
+      await service.askQuestion(dtoA);
+      expect(redisMock.get).toHaveBeenCalledWith(keyA);
+
+      // Same query in Workspace Beta produces a different cache key
+      const dtoB: SearchQueryDto = {
+        query: 'What is our secret revenue?',
+        workspaceId: 'workspace-beta',
+      };
+      const keyB = getExpectedCacheKey(dtoB.query, 'workspace-beta');
+
+      expect(keyA).not.toEqual(keyB);
+      expect(keyA).toContain('workspace-alpha');
+      expect(keyB).toContain('workspace-beta');
+    });
   });
 
   describe('Cache Miss', () => {
@@ -230,7 +265,7 @@ describe('AnswerService', () => {
       expect(redisMock.get).toHaveBeenCalledWith(expectedCacheKey);
 
       // 2. Verify QueryService.search called
-      expect(queryServiceMock.search).toHaveBeenCalledWith(dto);
+      expect(queryServiceMock.search).toHaveBeenCalledWith(dto, null);
       expect(queryServiceMock.search).toHaveBeenCalledTimes(1);
 
       // 3. Verify strict system prompt formatting

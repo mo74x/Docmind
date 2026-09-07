@@ -113,14 +113,18 @@ describe('AnswerService - Streaming RAG (SSE)', () => {
     jest.clearAllMocks();
   });
 
-  const getExpectedCacheKey = (query: string): string => {
+  const getExpectedCacheKey = (
+    query: string,
+    workspaceId?: string | null,
+  ): string => {
     const normalized = query
       .toLowerCase()
       .replace(/[^\w\s]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
     const hash = crypto.createHash('sha256').update(normalized).digest('hex');
-    return `docmind:cache:ask:${hash}`;
+    const ws = workspaceId || 'global';
+    return `docmind:cache:ask:${ws}:${hash}`;
   };
 
   function* createMockStream(tokens: string[]) {
@@ -230,7 +234,7 @@ describe('AnswerService - Streaming RAG (SSE)', () => {
       expect(queriesCounterMock.inc).toHaveBeenCalledTimes(1);
       expect(cacheHitsCounterMock.inc).not.toHaveBeenCalled();
       expect(redisMock.get).toHaveBeenCalledWith(expectedCacheKey);
-      expect(queryServiceMock.search).toHaveBeenCalledWith(dto);
+      expect(queryServiceMock.search).toHaveBeenCalledWith(dto, null);
       expect(generationTimerMock.startTimer).toHaveBeenCalledTimes(1);
       expect(endTimerMock).toHaveBeenCalledTimes(1);
 
@@ -316,7 +320,7 @@ describe('AnswerService - Streaming RAG (SSE)', () => {
         });
       });
 
-      expect(queryServiceMock.search).toHaveBeenCalledWith(dto);
+      expect(queryServiceMock.search).toHaveBeenCalledWith(dto, null);
       expect(openaiCreateMock).not.toHaveBeenCalled();
       expect(endTimerMock).toHaveBeenCalledTimes(1);
 

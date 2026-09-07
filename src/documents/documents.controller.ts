@@ -32,6 +32,7 @@ import {
   extractTextFromFile,
   sanitizeTitleFromFilename,
 } from './utils/file-extractor.util';
+import { CurrentWorkspaceId } from '../auth/decorators/current-workspace.decorator';
 
 @ApiTags('Documents')
 @Controller('documents')
@@ -41,12 +42,20 @@ export class DocumentsController {
   @Post()
   @ApiOperation({ summary: 'Submit a new document for RAG ingestion' })
   @ApiResponse({ status: 201, description: 'Document queued successfully' })
-  async ingest(@Body() dto: IngestDocumentDto) {
-    const document = await this.documentsService.submitDocument(dto);
+  async ingest(
+    @Body() dto: IngestDocumentDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    const effectiveWorkspaceId = workspaceId || dto.workspaceId || null;
+    const document = await this.documentsService.submitDocument(
+      dto,
+      effectiveWorkspaceId,
+    );
     return {
       message: 'Document queued for ingestion',
       id: document.id,
       status: document.status,
+      workspaceId: document.workspaceId,
     };
   }
 
@@ -76,6 +85,7 @@ export class DocumentsController {
   async uploadFile(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadDocumentDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
   ) {
     if (!file) {
       throw new BadRequestException('File is required');
@@ -84,16 +94,22 @@ export class DocumentsController {
     const content = await extractTextFromFile(file);
     const title =
       dto?.title?.trim() || sanitizeTitleFromFilename(file.originalname);
+    const effectiveWorkspaceId = workspaceId || dto?.workspaceId || null;
 
-    const document = await this.documentsService.submitDocument({
-      title,
-      content,
-    });
+    const document = await this.documentsService.submitDocument(
+      {
+        title,
+        content,
+        workspaceId: effectiveWorkspaceId,
+      },
+      effectiveWorkspaceId,
+    );
 
     return {
       message: 'Document uploaded and queued for ingestion',
       id: document.id,
       status: document.status,
+      workspaceId: document.workspaceId,
     };
   }
 
@@ -112,20 +128,27 @@ export class DocumentsController {
     description: 'Paginated list of documents',
     type: PaginatedResponseDto,
   })
-  async findAll(@Query() paginationDto: PaginationDto) {
-    return this.documentsService.findAll(paginationDto);
+  async findAll(
+    @Query() paginationDto: PaginationDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    return this.documentsService.findAll(paginationDto, workspaceId);
   }
 
   @Get(':id')
   @ApiOperation({
     summary: 'Poll a specific document by ID to check ingestion status',
   })
-  async findOne(@Param('id') id: string) {
-    const document = await this.documentsService.findOne(id);
+  async findOne(
+    @Param('id') id: string,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    const document = await this.documentsService.findOne(id, workspaceId);
     return {
       id: document.id,
       title: document.title,
       status: document.status,
+      workspaceId: document.workspaceId,
       failureReason: document.failureReason,
       createdAt: document.createdAt,
     };
@@ -161,7 +184,10 @@ export class DocumentsController {
     status: 404,
     description: 'Document with the specified ID was not found',
   })
-  remove(@Param('id') id: string) {
-    return this.documentsService.remove(id);
+  remove(
+    @Param('id') id: string,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    return this.documentsService.remove(id, workspaceId);
   }
 }

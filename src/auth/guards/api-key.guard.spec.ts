@@ -1,7 +1,14 @@
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+import {
+  ExecutionContext,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { ApiKeyGuard } from './api-key.guard';
+import { WorkspacesService } from '../../workspaces/workspaces.service';
 
 describe('ApiKeyGuard', () => {
   let guard: ApiKeyGuard;
@@ -11,18 +18,21 @@ describe('ApiKeyGuard', () => {
   let configServiceMock: {
     get: jest.Mock;
   };
+  let workspacesServiceMock: {
+    findByApiKey: jest.Mock;
+  };
 
   const createMockExecutionContext = (
     headers: Record<string, string> = {},
     url = '/documents',
-  ): ExecutionContext => {
-    const request = {
+  ): { context: ExecutionContext; request: any } => {
+    const request: any = {
       headers,
       url,
       originalUrl: url,
     };
 
-    return {
+    const context = {
       getHandler: jest.fn(),
       getClass: jest.fn(),
       switchToHttp: jest.fn().mockReturnValue({
@@ -30,6 +40,8 @@ describe('ApiKeyGuard', () => {
         getResponse: jest.fn(),
       }),
     } as unknown as ExecutionContext;
+
+    return { context, request };
   };
 
   beforeEach(() => {
@@ -39,10 +51,14 @@ describe('ApiKeyGuard', () => {
     configServiceMock = {
       get: jest.fn().mockReturnValue(undefined),
     };
+    workspacesServiceMock = {
+      findByApiKey: jest.fn().mockResolvedValue(null),
+    };
 
     guard = new ApiKeyGuard(
       reflectorMock as unknown as Reflector,
       configServiceMock as unknown as ConfigService,
+      workspacesServiceMock as unknown as WorkspacesService,
     );
   });
 
@@ -52,97 +68,170 @@ describe('ApiKeyGuard', () => {
   });
 
   describe('Public access bypass', () => {
-    it('should allow request when @Public() decorator is present on route', () => {
+    it('should allow request when @Public() decorator is present on route', async () => {
       reflectorMock.getAllAndOverride.mockReturnValue(true);
-      const context = createMockExecutionContext();
+      const { context } = createMockExecutionContext();
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
     });
 
-    it('should allow access to /health without API key', () => {
+    it('should allow access to /health without API key', async () => {
       configServiceMock.get.mockReturnValue('secret-key');
-      const context = createMockExecutionContext({}, '/health');
+      const { context } = createMockExecutionContext({}, '/health');
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
     });
 
-    it('should allow access to /metrics without API key', () => {
+    it('should allow access to /metrics without API key', async () => {
       configServiceMock.get.mockReturnValue('secret-key');
-      const context = createMockExecutionContext({}, '/metrics');
+      const { context } = createMockExecutionContext({}, '/metrics');
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
     });
 
-    it('should allow access to /api/docs without API key', () => {
+    it('should allow access to /api/docs without API key', async () => {
       configServiceMock.get.mockReturnValue('secret-key');
-      const context = createMockExecutionContext({}, '/api/docs');
+      const { context } = createMockExecutionContext({}, '/api/docs');
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
     });
   });
 
   describe('Development mode bypass', () => {
-    it('should allow request when API_KEY is not configured in environment or config', () => {
+    it('should allow request when API_KEY is not configured and attach null workspaceId', async () => {
       configServiceMock.get.mockReturnValue(undefined);
       delete process.env.API_KEY;
 
-      const context = createMockExecutionContext({}, '/documents');
+      const { context, request } = createMockExecutionContext({}, '/documents');
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.workspaceId).toBeNull();
+    });
+
+    it('should allow request and attach x-workspace-id header in development mode', async () => {
+      configServiceMock.get.mockReturnValue(undefined);
+      delete process.env.API_KEY;
+
+      const { context, request } = createMockExecutionContext(
+        { 'x-workspace-id': 'dev-ws-123' },
+        '/documents',
+      );
+
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.workspaceId).toBe('dev-ws-123');
     });
   });
 
-  describe('API Key verification', () => {
-    const validKey = 'docmind-secret-api-key-12345';
+  describe('Super Admin Master Key verification', () => {
+    const masterKey = 'master-admin-secret-key-12345';
 
     beforeEach(() => {
-      configServiceMock.get.mockReturnValue(validKey);
+      configServiceMock.get.mockReturnValue(masterKey);
     });
 
-    it('should allow request when valid x-api-key header is provided', () => {
-      const context = createMockExecutionContext({
-        'x-api-key': validKey,
+    it('should allow request with master key and set isSuperAdmin to true', async () => {
+      const { context, request } = createMockExecutionContext({
+        'x-api-key': masterKey,
       });
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.isSuperAdmin).toBe(true);
+      expect(request.workspaceId).toBeNull();
     });
 
-    it('should allow request when valid Authorization: Bearer <key> is provided', () => {
-      const context = createMockExecutionContext({
-        authorization: `Bearer ${validKey}`,
+    it('should allow request with master key and scope to x-workspace-id if provided', async () => {
+      const { context, request } = createMockExecutionContext({
+        'x-api-key': masterKey,
+        'x-workspace-id': 'target-ws-999',
       });
 
-      expect(guard.canActivate(context)).toBe(true);
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.isSuperAdmin).toBe(true);
+      expect(request.workspaceId).toBe('target-ws-999');
+    });
+  });
+
+  describe('Workspace Scoped API Key verification', () => {
+    const masterKey = 'master-admin-secret-key-12345';
+    const workspaceKey = 'dcm_ws_engineer_secret_key';
+    const mockWorkspace = {
+      id: 'ws-eng-1',
+      name: 'Engineering',
+      slug: 'engineering',
+      apiKey: workspaceKey,
+      createdAt: new Date(),
+    };
+
+    beforeEach(() => {
+      configServiceMock.get.mockReturnValue(masterKey);
     });
 
-    it('should throw UnauthorizedException when no API key is provided', () => {
-      const context = createMockExecutionContext({});
+    it('should allow request matching workspace apiKey and attach workspaceId', async () => {
+      workspacesServiceMock.findByApiKey.mockResolvedValue(mockWorkspace);
 
-      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
-      expect(() => guard.canActivate(context)).toThrow(
-        'Invalid or missing API key',
+      const { context, request } = createMockExecutionContext({
+        'x-api-key': workspaceKey,
+      });
+
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.isSuperAdmin).toBe(false);
+      expect(request.workspaceId).toBe('ws-eng-1');
+      expect(request.workspace).toEqual(mockWorkspace);
+    });
+
+    it('should allow request via Authorization Bearer token matching workspace key', async () => {
+      workspacesServiceMock.findByApiKey.mockResolvedValue(mockWorkspace);
+
+      const { context, request } = createMockExecutionContext({
+        authorization: `Bearer ${workspaceKey}`,
+      });
+
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.workspaceId).toBe('ws-eng-1');
+    });
+
+    it('should allow request when x-workspace-id matches workspace.id', async () => {
+      workspacesServiceMock.findByApiKey.mockResolvedValue(mockWorkspace);
+
+      const { context, request } = createMockExecutionContext({
+        'x-api-key': workspaceKey,
+        'x-workspace-id': 'ws-eng-1',
+      });
+
+      expect(await guard.canActivate(context)).toBe(true);
+      expect(request.workspaceId).toBe('ws-eng-1');
+    });
+
+    it('should throw ForbiddenException if x-workspace-id does not match workspace.id', async () => {
+      workspacesServiceMock.findByApiKey.mockResolvedValue(mockWorkspace);
+
+      const { context } = createMockExecutionContext({
+        'x-api-key': workspaceKey,
+        'x-workspace-id': 'ws-foreign-other-team',
+      });
+
+      await expect(guard.canActivate(context)).rejects.toThrow(
+        ForbiddenException,
       );
     });
 
-    it('should throw UnauthorizedException when invalid x-api-key is provided', () => {
-      const context = createMockExecutionContext({
+    it('should throw UnauthorizedException when API key is invalid', async () => {
+      workspacesServiceMock.findByApiKey.mockResolvedValue(null);
+
+      const { context } = createMockExecutionContext({
         'x-api-key': 'invalid-key-value',
       });
 
-      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
-      expect(() => guard.canActivate(context)).toThrow(
-        'Invalid or missing API key',
+      await expect(guard.canActivate(context)).rejects.toThrow(
+        UnauthorizedException,
       );
     });
 
-    it('should throw UnauthorizedException when invalid Authorization Bearer key is provided', () => {
-      const context = createMockExecutionContext({
-        authorization: 'Bearer wrong-bearer-key',
-      });
+    it('should throw UnauthorizedException when no API key is provided and master key is configured', async () => {
+      const { context } = createMockExecutionContext({});
 
-      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
-      expect(() => guard.canActivate(context)).toThrow(
-        'Invalid or missing API key',
+      await expect(guard.canActivate(context)).rejects.toThrow(
+        UnauthorizedException,
       );
     });
   });

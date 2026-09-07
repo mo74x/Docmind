@@ -70,14 +70,19 @@ export class ChatService {
   /**
    * Create a new chat session
    */
-  async createSession(dto?: CreateChatSessionDto): Promise<ChatSession> {
+  async createSession(
+    dto?: CreateChatSessionDto,
+    workspaceId?: string | null,
+  ): Promise<ChatSession> {
     const title = dto?.title?.trim() || 'New Chat';
     const session = this.sessionRepo.create({
       title,
-      workspaceId: dto?.workspaceId || null,
+      workspaceId: workspaceId ?? dto?.workspaceId ?? null,
     });
     const saved = await this.sessionRepo.save(session);
-    this.logger.log(`Created chat session: ${saved.id} ("${saved.title}")`);
+    this.logger.log(
+      `Created chat session: ${saved.id} ("${saved.title}") in workspace ${saved.workspaceId || 'global'}`,
+    );
     return saved;
   }
 
@@ -86,13 +91,17 @@ export class ChatService {
    */
   async listSessions(
     paginationDto: PaginationDto,
+    workspaceId?: string | null,
   ): Promise<PaginatedResponseDto<ChatSession>> {
     const page = paginationDto.page || 1;
     const limit = paginationDto.limit || 10;
     const order = paginationDto.order || 'DESC';
     const skip = (page - 1) * limit;
 
+    const whereCondition = workspaceId ? { workspaceId } : undefined;
+
     const [sessions, total] = await this.sessionRepo.findAndCount({
+      where: whereCondition,
       order: { updatedAt: order },
       skip,
       take: limit,
@@ -104,7 +113,10 @@ export class ChatService {
   /**
    * Retrieve a chat session with all messages ordered chronologically
    */
-  async getSessionWithMessages(sessionId: string): Promise<ChatSession> {
+  async getSessionWithMessages(
+    sessionId: string,
+    workspaceId?: string | null,
+  ): Promise<ChatSession> {
     const session = await this.sessionRepo.findOne({
       where: { id: sessionId },
       relations: {
@@ -121,18 +133,29 @@ export class ChatService {
       throw new NotFoundException(`Chat session ${sessionId} not found`);
     }
 
+    if (workspaceId && session.workspaceId !== workspaceId) {
+      throw new NotFoundException(`Chat session ${sessionId} not found`);
+    }
+
     return session;
   }
 
   /**
    * Delete a chat session and all its associated messages
    */
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(
+    sessionId: string,
+    workspaceId?: string | null,
+  ): Promise<void> {
     const session = await this.sessionRepo.findOne({
       where: { id: sessionId },
     });
 
     if (!session) {
+      throw new NotFoundException(`Chat session ${sessionId} not found`);
+    }
+
+    if (workspaceId && session.workspaceId !== workspaceId) {
       throw new NotFoundException(`Chat session ${sessionId} not found`);
     }
 
@@ -145,7 +168,7 @@ export class ChatService {
    */
   async reformulateQuery(
     question: string,
-    history: ChatMessage[],
+    history: Array<{ role: string; content: string }>,
   ): Promise<string> {
     if (!history || history.length === 0) {
       return question;
@@ -197,8 +220,9 @@ Standalone Query:`;
   async sendMessage(
     sessionId: string,
     dto: SendMessageDto,
+    workspaceId?: string | null,
   ): Promise<SendMessageResponse> {
-    const session = await this.getSessionWithMessages(sessionId);
+    const session = await this.getSessionWithMessages(sessionId, workspaceId);
 
     // Auto-update session title if it's currently the default 'New Chat'
     if (session.title === 'New Chat') {
@@ -213,12 +237,15 @@ Standalone Query:`;
       session.messages || [],
     );
 
-    // Step 2: Knowledge Retrieval (Hybrid / Vector / FTS)
-    const searchResults = await this.queryService.search({
-      query: standaloneQuery,
-      limit: dto.limit || 5,
-      mode: dto.mode || 'hybrid',
-    });
+    // Step 2: Knowledge Retrieval (Hybrid / Vector / FTS) bounded to workspace
+    const searchResults = await this.queryService.search(
+      {
+        query: standaloneQuery,
+        limit: dto.limit || 5,
+        mode: dto.mode || 'hybrid',
+      },
+      session.workspaceId,
+    );
 
     const sources: AnswerSource[] = searchResults.map((result, idx) => ({
       citation: `[Source ${idx + 1}]`,
@@ -302,13 +329,17 @@ ${formattedContext || 'No relevant sources found in knowledge base.'}`;
   sendMessageStream(
     sessionId: string,
     dto: SendMessageDto,
+    workspaceId?: string | null,
   ): Observable<MessageEvent> {
     return new Observable<MessageEvent>((subscriber) => {
       let isAborted = false;
 
       void (async () => {
         try {
-          const session = await this.getSessionWithMessages(sessionId);
+          const session = await this.getSessionWithMessages(
+            sessionId,
+            workspaceId,
+          );
 
           if (session.title === 'New Chat') {
             session.title = dto.content.trim().slice(0, 60);
@@ -323,12 +354,15 @@ ${formattedContext || 'No relevant sources found in knowledge base.'}`;
 
           if (isAborted) return;
 
-          // Step 2: Knowledge Retrieval
-          const searchResults = await this.queryService.search({
-            query: standaloneQuery,
-            limit: dto.limit || 5,
-            mode: dto.mode || 'hybrid',
-          });
+          // Step 2: Knowledge Retrieval bounded to session workspace
+          const searchResults = await this.queryService.search(
+            {
+              query: standaloneQuery,
+              limit: dto.limit || 5,
+              mode: dto.mode || 'hybrid',
+            },
+            session.workspaceId,
+          );
 
           if (isAborted) return;
 

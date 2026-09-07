@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -10,6 +10,7 @@ import { ChatService, ChatStreamEventData } from './chat.service';
 import { ChatSession } from './entities/chat-session.entity';
 import { ChatMessage } from './entities/chat-message.entity';
 import { QueryService } from '../query/query.service';
+import { PaginationDto } from '../common/dto/pagination.dto';
 
 describe('ChatService', () => {
   let service: ChatService;
@@ -162,6 +163,7 @@ describe('ChatService', () => {
       });
 
       expect(sessionRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: undefined,
         order: { updatedAt: 'DESC' },
         skip: 0,
         take: 10,
@@ -170,6 +172,19 @@ describe('ChatService', () => {
       expect(result.meta.totalItems).toBe(2);
       expect(result.meta.totalPages).toBe(1);
     });
+
+    it('should filter sessions by workspaceId when provided', async () => {
+      sessionRepoMock.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.listSessions(new PaginationDto(), 'ws-team-xyz');
+
+      expect(sessionRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: { workspaceId: 'ws-team-xyz' },
+        order: { updatedAt: 'DESC' },
+        skip: 0,
+        take: 10,
+      });
+    });
   });
 
   describe('getSessionWithMessages', () => {
@@ -177,6 +192,7 @@ describe('ChatService', () => {
       const mockSession = {
         id: 'sess-1',
         title: 'DocMind Chat',
+        workspaceId: null,
         messages: [
           { id: 'm1', role: 'user', content: 'Hi' },
           { id: 'm2', role: 'assistant', content: 'Hello!' },
@@ -201,11 +217,24 @@ describe('ChatService', () => {
         service.getSessionWithMessages('non-existent'),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('should throw NotFoundException if session belongs to another workspace', async () => {
+      const mockSession = {
+        id: 'sess-1',
+        workspaceId: 'ws-alpha',
+        messages: [],
+      };
+      sessionRepoMock.findOne.mockResolvedValue(mockSession);
+
+      await expect(
+        service.getSessionWithMessages('sess-1', 'ws-beta'),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
 
   describe('deleteSession', () => {
     it('should remove the session successfully', async () => {
-      const mockSession = { id: 'sess-1' };
+      const mockSession = { id: 'sess-1', workspaceId: null };
       sessionRepoMock.findOne.mockResolvedValue(mockSession);
 
       await service.deleteSession('sess-1');
@@ -220,6 +249,17 @@ describe('ChatService', () => {
         NotFoundException,
       );
     });
+
+    it('should throw NotFoundException when deleting session from another workspace', async () => {
+      sessionRepoMock.findOne.mockResolvedValue({
+        id: 'sess-1',
+        workspaceId: 'ws-a',
+      });
+
+      await expect(service.deleteSession('sess-1', 'ws-b')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
   });
 
   describe('reformulateQuery', () => {
@@ -230,63 +270,57 @@ describe('ChatService', () => {
     });
 
     it('should call OpenAI to reformulate follow-up question when history exists', async () => {
-      openaiCreateMock.mockResolvedValue({
+      const history = [
+        {
+          id: 'm1',
+          role: 'user',
+          content: 'What is DocMind chunking size?',
+          createdAt: new Date(),
+        },
+        {
+          id: 'm2',
+          role: 'assistant',
+          content: 'DocMind default chunk size is 1200 characters.',
+          createdAt: new Date(),
+        },
+      ];
+
+      openaiCreateMock.mockResolvedValueOnce({
         choices: [
           {
             message: {
-              content:
-                'What is the default overlap size for the DocMind chunker?',
+              content: 'What is the default chunk overlap in DocMind?',
             },
           },
         ],
       });
 
-      const history: ChatMessage[] = [
-        {
-          id: '1',
-          sessionId: 'sess-1',
-          role: 'user',
-          content: 'What is DocMind chunking strategy?',
-          createdAt: new Date(),
-          session: null as any,
-          sources: null,
-        },
-        {
-          id: '2',
-          sessionId: 'sess-1',
-          role: 'assistant',
-          content: 'It uses character-level chunking.',
-          createdAt: new Date(),
-          session: null as any,
-          sources: null,
-        },
-      ];
-
       const result = await service.reformulateQuery(
-        'What is the default overlap size?',
+        'What is the overlap?',
         history,
       );
 
-      expect(openaiCreateMock).toHaveBeenCalled();
-      expect(result).toBe(
-        'What is the default overlap size for the DocMind chunker?',
+      expect(result).toBe('What is the default chunk overlap in DocMind?');
+      expect(openaiCreateMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          temperature: 0.0,
+        }),
       );
     });
 
-    it('should gracefully fallback to original question if OpenAI fails', async () => {
-      openaiCreateMock.mockRejectedValue(new Error('OpenAI timeout'));
-
-      const history: ChatMessage[] = [
+    it('should fallback to original question on OpenAI API error during reformulation', async () => {
+      const history = [
         {
-          id: '1',
-          sessionId: 'sess-1',
+          id: 'm1',
           role: 'user',
-          content: 'Hello',
+          content: 'What is DocMind?',
           createdAt: new Date(),
-          session: null as any,
-          sources: null,
         },
       ];
+
+      openaiCreateMock.mockRejectedValueOnce(
+        new Error('Rate limit or network failure'),
+      );
 
       const result = await service.reformulateQuery(
         'What is the overlap?',
@@ -297,10 +331,11 @@ describe('ChatService', () => {
   });
 
   describe('sendMessage', () => {
-    it('should execute multi-turn RAG, reformulate query, retrieve chunks, and save messages', async () => {
+    it('should execute multi-turn RAG, reformulate query, retrieve chunks bounded to workspace, and save messages', async () => {
       const mockSession = {
         id: 'sess-1',
         title: 'New Chat',
+        workspaceId: 'ws-chat-tenant-1',
         messages: [
           {
             id: 'm1',
@@ -350,21 +385,28 @@ describe('ChatService', () => {
         },
       ]);
 
-      const response = await service.sendMessage('sess-1', {
-        content: 'How does it handle background tasks?',
-        mode: 'hybrid',
-        limit: 3,
-      });
+      const response = await service.sendMessage(
+        'sess-1',
+        {
+          content: 'How does it handle background tasks?',
+          mode: 'hybrid',
+          limit: 3,
+        },
+        'ws-chat-tenant-1',
+      );
 
       expect(response.sessionId).toBe('sess-1');
       expect(response.standaloneQuery).toBe(
         'How does DocMind handle background processing?',
       );
-      expect(queryServiceMock.search).toHaveBeenCalledWith({
-        query: 'How does DocMind handle background processing?',
-        limit: 3,
-        mode: 'hybrid',
-      });
+      expect(queryServiceMock.search).toHaveBeenCalledWith(
+        {
+          query: 'How does DocMind handle background processing?',
+          limit: 3,
+          mode: 'hybrid',
+        },
+        'ws-chat-tenant-1',
+      );
       expect(response.sources).toHaveLength(1);
       expect(response.sources[0].citation).toBe('[Source 1]');
       expect(messageRepoMock.save).toHaveBeenCalledTimes(2); // user and assistant
@@ -378,6 +420,7 @@ describe('ChatService', () => {
       const mockSession = {
         id: 'sess-1',
         title: 'New Chat',
+        workspaceId: null,
         messages: [],
       };
       sessionRepoMock.findOne.mockResolvedValue(mockSession);
@@ -398,10 +441,11 @@ describe('ChatService', () => {
   });
 
   describe('sendMessageStream', () => {
-    it('should stream sources, incremental tokens, and done event via SSE', async () => {
+    it('should stream sources, incremental tokens, and done event via SSE bounded to workspace', async () => {
       const mockSession = {
         id: 'sess-1',
         title: 'Chat Session',
+        workspaceId: 'ws-stream-tenant-2',
         messages: [],
       };
       sessionRepoMock.findOne.mockResolvedValue(mockSession);
@@ -439,6 +483,10 @@ describe('ChatService', () => {
 
       expect(events[0].type).toBe('sources');
       expect((events[0] as any).data).toHaveLength(1);
+      expect(queryServiceMock.search).toHaveBeenCalledWith(
+        expect.anything(),
+        'ws-stream-tenant-2',
+      );
 
       const tokenEvents = events.filter((e) => e.type === 'token');
       expect(tokenEvents).toHaveLength(3);

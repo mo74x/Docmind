@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -6,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  Index,
 } from 'typeorm';
 import { ChatMessage } from './chat-message.entity';
 
@@ -17,6 +17,7 @@ export class ChatSession {
   @Column({ type: 'varchar', length: 255, default: 'New Chat' })
   title: string;
 
+  @Index()
   @Column({ type: 'uuid', nullable: true })
   workspaceId: string | null;
 

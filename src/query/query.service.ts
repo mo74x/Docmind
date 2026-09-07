@@ -23,24 +23,34 @@ export class QueryService {
   /**
    * Search knowledge base routing to hybrid, dense vector, or full-text lexical retrieval based on mode.
    */
-  async search(dto: SearchQueryDto): Promise<SearchResult[]> {
+  async search(
+    dto: SearchQueryDto,
+    workspaceId?: string | null,
+  ): Promise<SearchResult[]> {
+    const effectiveWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
     const mode = dto.mode || 'hybrid';
     switch (mode) {
       case 'vector':
-        return this.vectorSearch(dto);
+        return this.vectorSearch(dto, effectiveWorkspaceId);
       case 'fts':
-        return this.ftsSearch(dto);
+        return this.ftsSearch(dto, effectiveWorkspaceId);
       case 'hybrid':
       default:
-        return this.hybridSearch(dto);
+        return this.hybridSearch(dto, effectiveWorkspaceId);
     }
   }
 
   /**
    * Hybrid Search: Combines pgvector cosine similarity with PostgreSQL tsvector using Reciprocal Rank Fusion (RRF).
    */
-  async hybridSearch(dto: SearchQueryDto): Promise<SearchResult[]> {
-    this.logger.log(`Performing hybrid RRF search for: "${dto.query}"`);
+  async hybridSearch(
+    dto: SearchQueryDto,
+    workspaceId?: string | null,
+  ): Promise<SearchResult[]> {
+    const effectiveWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
+    this.logger.log(
+      `Performing hybrid RRF search for: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'})`,
+    );
     const [queryVector] = await this.embeddingsService.embedBatch([dto.query]);
     const pgVectorString = `[${queryVector.join(',')}]`;
     const limit = dto.limit || 5;
@@ -52,6 +62,7 @@ export class QueryService {
          FROM chunks c
          JOIN documents d ON c."documentId" = d.id
          WHERE d.status = 'READY'
+           AND ($4::uuid IS NULL OR c."workspaceId" = $4::uuid)
          ORDER BY c.embedding <-> $1
          LIMIT 20
        ),
@@ -60,7 +71,9 @@ export class QueryService {
                 ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.tsv, plainto_tsquery('english', $2)) DESC) AS rank_fts
          FROM chunks c
          JOIN documents d ON c."documentId" = d.id
-         WHERE d.status = 'READY' AND c.tsv @@ plainto_tsquery('english', $2)
+         WHERE d.status = 'READY'
+           AND ($4::uuid IS NULL OR c."workspaceId" = $4::uuid)
+           AND c.tsv @@ plainto_tsquery('english', $2)
          ORDER BY ts_rank_cd(c.tsv, plainto_tsquery('english', $2)) DESC
          LIMIT 20
        )
@@ -74,7 +87,7 @@ export class QueryService {
        FULL OUTER JOIN fts_matches f ON v.id = f.id
        ORDER BY similarity DESC
        LIMIT $3`,
-      [pgVectorString, dto.query, limit],
+      [pgVectorString, dto.query, limit, effectiveWorkspaceId],
     );
 
     return results;
@@ -83,8 +96,14 @@ export class QueryService {
   /**
    * Dense vector search using pgvector cosine distance operator (<->).
    */
-  async vectorSearch(dto: SearchQueryDto): Promise<SearchResult[]> {
-    this.logger.log(`Performing dense vector search for: "${dto.query}"`);
+  async vectorSearch(
+    dto: SearchQueryDto,
+    workspaceId?: string | null,
+  ): Promise<SearchResult[]> {
+    const effectiveWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
+    this.logger.log(
+      `Performing dense vector search for: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'})`,
+    );
     const [queryVector] = await this.embeddingsService.embedBatch([dto.query]);
     const pgVectorString = `[${queryVector.join(',')}]`;
     const limit = dto.limit || 5;
@@ -98,9 +117,10 @@ export class QueryService {
        FROM chunks c
        JOIN documents d ON c."documentId" = d.id
        WHERE d.status = 'READY'
+         AND ($3::uuid IS NULL OR c."workspaceId" = $3::uuid)
        ORDER BY c.embedding <-> $1
        LIMIT $2`,
-      [pgVectorString, limit],
+      [pgVectorString, limit, effectiveWorkspaceId],
     );
 
     return results;
@@ -109,8 +129,14 @@ export class QueryService {
   /**
    * Full-text lexical search using PostgreSQL tsvector and plainto_tsquery.
    */
-  async ftsSearch(dto: SearchQueryDto): Promise<SearchResult[]> {
-    this.logger.log(`Performing full-text lexical search for: "${dto.query}"`);
+  async ftsSearch(
+    dto: SearchQueryDto,
+    workspaceId?: string | null,
+  ): Promise<SearchResult[]> {
+    const effectiveWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
+    this.logger.log(
+      `Performing full-text lexical search for: "${dto.query}" (workspace: ${effectiveWorkspaceId || 'global'})`,
+    );
     const limit = dto.limit || 5;
     const results = await this.dataSource.query<SearchResult[]>(
       `SELECT 
@@ -121,10 +147,12 @@ export class QueryService {
          d.id AS "documentId"
        FROM chunks c
        JOIN documents d ON c."documentId" = d.id
-       WHERE d.status = 'READY' AND c.tsv @@ plainto_tsquery('english', $1)
+       WHERE d.status = 'READY'
+         AND ($3::uuid IS NULL OR c."workspaceId" = $3::uuid)
+         AND c.tsv @@ plainto_tsquery('english', $1)
        ORDER BY similarity DESC
        LIMIT $2`,
-      [dto.query, limit],
+      [dto.query, limit, effectiveWorkspaceId],
     );
 
     return results;
