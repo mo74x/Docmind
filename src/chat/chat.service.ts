@@ -61,7 +61,10 @@ export class ChatService {
     private readonly configService: ConfigService,
   ) {
     this.openai = new OpenAI({
-      apiKey: this.configService.get<string>('openai.apiKey'),
+      apiKey:
+        this.configService.get<string>('openai.apiKey') ||
+        process.env.OPENAI_API_KEY ||
+        'mock-key',
     });
     this.model =
       this.configService.get<string>('openai.chatModel') || 'gpt-4o-mini';

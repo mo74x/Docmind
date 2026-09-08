@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Injectable, Logger, Inject, MessageEvent } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
@@ -8,6 +9,7 @@ import { QueryService } from './query.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { Histogram, Counter } from 'prom-client';
+import { CircuitBreaker } from '../common/resilience/circuit-breaker';
 
 export interface AnswerSource {
   citation: string;
@@ -47,11 +49,12 @@ export class AnswerService {
   private readonly logger = new Logger(AnswerService.name);
   private readonly model: string;
   private readonly CACHE_TTL = 86400;
+  private readonly circuitBreaker: CircuitBreaker;
 
   constructor(
+    private readonly configService: ConfigService,
+    private readonly queryService: QueryService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
-    private configService: ConfigService,
-    private queryService: QueryService,
     @InjectMetric('rag_queries_total')
     private readonly queriesCounter: Counter<string>,
     @InjectMetric('rag_cache_hits_total')
@@ -62,10 +65,24 @@ export class AnswerService {
     private readonly vectorSearchTimer: Histogram<string>,
   ) {
     this.openai = new OpenAI({
-      apiKey: this.configService.get<string>('openai.apiKey'),
+      apiKey:
+        this.configService.get<string>('openai.apiKey') ||
+        process.env.OPENAI_API_KEY ||
+        'mock-key',
+      timeout: 20000,
+      maxRetries: 3,
     });
     this.model =
       this.configService.get<string>('openai.chatModel') || 'gpt-4o-mini';
+    this.circuitBreaker = new CircuitBreaker({
+      name: 'OpenAI-Chat',
+      failureThreshold: 5,
+      resetTimeoutMs: 30000,
+    });
+  }
+
+  getCircuitBreaker(): CircuitBreaker {
+    return this.circuitBreaker;
   }
 
   async askQuestion(
@@ -113,19 +130,42 @@ export class AnswerService {
 
     const systemPrompt = `You are a highly precise knowledge-base assistant. Answer the user's question using ONLY the provided sources below.\n\nRULES:\n1. Cite sources inline as [Source N].\n2. Do not hallucinate.\n\nSOURCES:\n${formattedContext}`;
 
-    const response = await this.openai.chat.completions.create({
-      model: this.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: dto.query },
-      ],
-      temperature: 0.1,
-    });
-    endTimer();
+    let answerText: string | null = null;
+    let isDegraded = false;
+
+    try {
+      const response = await this.circuitBreaker.execute(() =>
+        this.openai.chat.completions.create({
+          model: this.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: dto.query },
+          ],
+          temperature: 0.1,
+        }),
+      );
+      answerText = response.choices[0].message.content;
+    } catch (llmError: any) {
+      isDegraded = true;
+      this.logger.error(
+        `OpenAI LLM generation failed or circuit open: ${llmError?.message}. Falling back to retrieved excerpts.`,
+      );
+      answerText =
+        'AI summary generation is temporarily degraded due to upstream LLM service latency. ' +
+        'Here are the most relevant excerpts from your documents:\n\n' +
+        searchResults
+          .slice(0, 3)
+          .map(
+            (r, i) => `[Source ${i + 1}] (${r.documentTitle}):\n${r.content}`,
+          )
+          .join('\n\n');
+    } finally {
+      endTimer();
+    }
 
     const finalResult = {
       query: dto.query,
-      answer: response.choices[0].message.content,
+      answer: answerText,
       sources: searchResults.map((res, i) => ({
         citation: `[Source ${i + 1}]`,
         documentTitle: res.documentTitle,
@@ -135,14 +175,15 @@ export class AnswerService {
       isCached: false, // Flag to indicate a fresh generation
     };
 
-    // Store the successful generation in Redis
-    // We set 'isCached' to true *only* in the version we save to Redis
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify({ ...finalResult, isCached: true }),
-      'EX',
-      this.CACHE_TTL,
-    );
+    // Store successful non-degraded generation in Redis
+    if (!isDegraded) {
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify({ ...finalResult, isCached: true }),
+        'EX',
+        this.CACHE_TTL,
+      );
+    }
 
     return finalResult;
   }

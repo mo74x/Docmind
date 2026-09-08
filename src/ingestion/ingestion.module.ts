@@ -13,8 +13,9 @@ import { IngestionEventsService } from './ingestion-events.service';
       name: 'ingestion',
       defaultJobOptions: {
         attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: true, // Keep Redis clean
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: { count: 100, age: 86400 },
+        removeOnFail: false, // Retain failed jobs in BullMQ failed set (DLQ)
       },
     }),
     EmbeddingsModule,

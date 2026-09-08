@@ -1,17 +1,27 @@
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-import { Controller, Get, Inject, HttpStatus, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  HttpStatus,
+  Res,
+  Optional,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import Redis from 'ioredis';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { Public } from '../auth/decorators/public.decorator';
 
 interface ServiceHealth {
   status: 'up' | 'down';
   latencyMs?: number;
   error?: string;
+  details?: Record<string, any>;
 }
 
 @Public()
@@ -21,6 +31,9 @@ export class HealthController {
   constructor(
     private readonly dataSource: DataSource,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
+    @Optional()
+    @InjectQueue('ingestion')
+    private readonly ingestionQueue?: Queue,
   ) {}
 
   @Get()
@@ -77,6 +90,33 @@ export class HealthController {
         latencyMs: Date.now() - redisStart,
         error: err?.message || 'Redis connection error',
       };
+    }
+    // Check BullMQ Queue connectivity & job counts
+    if (this.ingestionQueue) {
+      const queueStart = Date.now();
+      try {
+        const isPaused = await this.ingestionQueue.isPaused();
+        const counts = await this.ingestionQueue.getJobCounts(
+          'waiting',
+          'active',
+          'failed',
+          'delayed',
+        );
+        services.queue = {
+          status: 'up',
+          latencyMs: Date.now() - queueStart,
+          details: {
+            isPaused,
+            ...counts,
+          },
+        };
+      } catch (err: any) {
+        services.queue = {
+          status: 'down',
+          latencyMs: Date.now() - queueStart,
+          error: err?.message || 'Queue connection error',
+        };
+      }
     }
 
     const allHealthy = Object.values(services).every(

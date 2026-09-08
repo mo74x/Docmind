@@ -22,6 +22,14 @@ export function Processor(_queueNameOrOptions?: any): ClassDecorator {
   return (_target: any) => {};
 }
 
+export function OnWorkerEvent(_event: string): MethodDecorator {
+  return (
+    _target: any,
+    _propertyKey: string | symbol,
+    descriptor: PropertyDescriptor,
+  ) => descriptor;
+}
+
 const mockQueue = {
   add: () => Promise.resolve({ id: 'mock-job-id' }),
   process: () => Promise.resolve(),

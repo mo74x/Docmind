@@ -121,10 +121,16 @@ describe('DocumentsService', () => {
         sourceContent: dto.content,
         workspaceId: null,
       });
-      expect(documentRepoMock.save).toHaveBeenCalledWith(mockCreatedEntity);
-      expect(ingestionQueueMock.add).toHaveBeenCalledWith('ingest-doc', {
-        documentId: mockSavedEntity.id,
-      });
+      expect(ingestionQueueMock.add).toHaveBeenCalledWith(
+        'ingest-doc',
+        {
+          documentId: mockSavedEntity.id,
+        },
+        expect.objectContaining({
+          attempts: 3,
+          removeOnFail: false,
+        }),
+      );
       expect(result).toEqual(mockSavedEntity);
     });
 

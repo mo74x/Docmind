@@ -414,5 +414,29 @@ describe('AnswerService', () => {
       // Verify timer end function was called after OpenAI completed
       expect(endTimerMock).toHaveBeenCalledTimes(1);
     });
+
+    it('should gracefully degrade and return excerpts when OpenAI fails or circuit trips', async () => {
+      redisMock.get.mockResolvedValue(null);
+      queryServiceMock.search.mockResolvedValue([
+        {
+          chunkId: 'c-1',
+          content: 'Important excerpt from document.',
+          similarity: 0.95,
+          documentTitle: 'Guide',
+          documentId: 'd-1',
+        },
+      ]);
+      openaiCreateMock.mockRejectedValue(new Error('OpenAI service outage'));
+
+      const result = await service.askQuestion({ query: 'How does it work?' });
+
+      expect(result.answer).toContain(
+        'AI summary generation is temporarily degraded',
+      );
+      expect(result.answer).toContain('Important excerpt from document.');
+      expect(result.sources).toHaveLength(1);
+      expect(redisMock.set).not.toHaveBeenCalled();
+      expect(endTimerMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

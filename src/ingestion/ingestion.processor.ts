@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -163,5 +163,17 @@ export class IngestionProcessor extends WorkerHost {
 
   private async updateStatus(id: string, status: DocumentStatus) {
     await this.documentRepo.update(id, { status });
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job<{ documentId: string }>, error: Error) {
+    this.logger.error(
+      `Job ${job.id} for document ${job.data?.documentId} failed on attempt ${job.attemptsMade}: ${error.message}`,
+    );
+  }
+
+  @OnWorkerEvent('error')
+  onError(error: Error) {
+    this.logger.error(`Ingestion worker error: ${error.message}`, error.stack);
   }
 }

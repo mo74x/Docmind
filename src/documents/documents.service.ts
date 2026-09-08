@@ -38,10 +38,18 @@ export class DocumentsService {
     });
     const savedDocument = await this.documentRepo.save(document);
 
-    // Dispatch background job to the 'ingestion' queue
-    await this.ingestionQueue.add('ingest-doc', {
-      documentId: savedDocument.id,
-    });
+    // Dispatch background job to the 'ingestion' queue with retries and DLQ retention
+    await this.ingestionQueue.add(
+      'ingest-doc',
+      {
+        documentId: savedDocument.id,
+      },
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnFail: false,
+      },
+    );
 
     return savedDocument;
   }

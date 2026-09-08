@@ -7,6 +7,7 @@ import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import helmet from 'helmet';
 
 async function bootstrap() {
@@ -67,6 +68,9 @@ async function bootstrap() {
 
   // Enable global exception filter
   app.useGlobalFilters(new AllExceptionsFilter());
+
+  // Enable global HTTP request logging
+  app.useGlobalInterceptors(new LoggingInterceptor());
 
   // Enable automatic DTO validation
   app.useGlobalPipes(

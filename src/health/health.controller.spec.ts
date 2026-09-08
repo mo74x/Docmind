@@ -1,8 +1,11 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/unbound-method */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpStatus } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { getQueueToken } from '@nestjs/bullmq';
 import type { Response } from 'express';
 import { HealthController } from './health.controller';
 
@@ -13,6 +16,10 @@ describe('HealthController', () => {
   };
   let redisMock: {
     ping: jest.Mock;
+  };
+  let queueMock: {
+    isPaused: jest.Mock;
+    getJobCounts: jest.Mock;
   };
 
   const createMockResponse = () => {
@@ -30,12 +37,22 @@ describe('HealthController', () => {
     redisMock = {
       ping: jest.fn(),
     };
+    queueMock = {
+      isPaused: jest.fn().mockResolvedValue(false),
+      getJobCounts: jest.fn().mockResolvedValue({
+        waiting: 0,
+        active: 0,
+        failed: 0,
+        delayed: 0,
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [HealthController],
       providers: [
         { provide: DataSource, useValue: dataSourceMock },
         { provide: 'REDIS_CLIENT', useValue: redisMock },
+        { provide: getQueueToken('ingestion'), useValue: queueMock },
       ],
     }).compile();
 
@@ -69,6 +86,15 @@ describe('HealthController', () => {
             redis: expect.objectContaining({
               status: 'up',
               latencyMs: expect.any(Number),
+            }),
+            queue: expect.objectContaining({
+              status: 'up',
+              latencyMs: expect.any(Number),
+              details: expect.objectContaining({
+                isPaused: false,
+                waiting: 0,
+                active: 0,
+              }),
             }),
           }),
           memory: expect.objectContaining({
@@ -184,6 +210,52 @@ describe('HealthController', () => {
           }),
         }),
       );
+    });
+
+    it('should return 503 Service Unavailable when Queue throws an error', async () => {
+      dataSourceMock.query.mockResolvedValue([{ '?column?': 1 }]);
+      redisMock.ping.mockResolvedValue('PONG');
+      queueMock.getJobCounts.mockRejectedValue(
+        new Error('Queue connection refused'),
+      );
+      const res = createMockResponse();
+
+      await controller.checkHealth(res);
+
+      expect(res.status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'error',
+          services: expect.objectContaining({
+            database: expect.objectContaining({ status: 'up' }),
+            redis: expect.objectContaining({ status: 'up' }),
+            queue: expect.objectContaining({
+              status: 'down',
+              error: 'Queue connection refused',
+              latencyMs: expect.any(Number),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('should handle checkHealth gracefully when queue is not provided', async () => {
+      const controllerWithoutQueue = new HealthController(
+        dataSourceMock as any,
+        redisMock as any,
+        undefined,
+      );
+      dataSourceMock.query.mockResolvedValue([{ '?column?': 1 }]);
+      redisMock.ping.mockResolvedValue('PONG');
+      const res = createMockResponse();
+
+      await controllerWithoutQueue.checkHealth(res);
+
+      expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
+      const jsonCall = (res.json as jest.Mock).mock.calls[0][0];
+      expect(jsonCall.services.database.status).toBe('up');
+      expect(jsonCall.services.redis.status).toBe('up');
+      expect(jsonCall.services.queue).toBeUndefined();
     });
   });
 });
