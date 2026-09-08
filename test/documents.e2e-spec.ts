@@ -29,9 +29,11 @@ describe('DocumentsController (e2e)', () => {
 
   const documentsServiceMock = {
     submitDocument: jest.fn(),
+    submitDocumentsBulk: jest.fn(),
     findAll: jest.fn(),
     findOne: jest.fn(),
     remove: jest.fn(),
+    removeBulk: jest.fn(),
     getProgressStream: jest.fn(),
   };
 
@@ -466,6 +468,153 @@ describe('DocumentsController (e2e)', () => {
       );
       expect(documentsServiceMock.getProgressStream).toHaveBeenCalledWith(
         nonExistentId,
+      );
+    });
+  });
+
+  describe('POST /api/v1/documents/bulk', () => {
+    it('should submit an array of documents and return 201 Created', async () => {
+      const mockResult = {
+        message: '2 document(s) queued for ingestion',
+        count: 2,
+        documents: [
+          {
+            id: 'doc-1',
+            title: 'Doc 1',
+            status: DocumentStatus.PENDING,
+            workspaceId: null,
+          },
+          {
+            id: 'doc-2',
+            title: 'Doc 2',
+            status: DocumentStatus.PENDING,
+            workspaceId: null,
+          },
+        ],
+      };
+      documentsServiceMock.submitDocumentsBulk.mockResolvedValue(mockResult);
+
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/documents/bulk')
+        .send({
+          documents: [
+            {
+              title: 'Doc 1',
+              content:
+                'Content text for document 1 that has sufficient length.',
+            },
+            {
+              title: 'Doc 2',
+              content:
+                'Content text for document 2 that has sufficient length.',
+            },
+          ],
+        })
+        .expect(201);
+
+      expect(response.body).toEqual(mockResult);
+      expect(documentsServiceMock.submitDocumentsBulk).toHaveBeenCalled();
+    });
+
+    it('should return 400 Bad Request on empty documents array', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/documents/bulk')
+        .send({ documents: [] })
+        .expect(400);
+    });
+  });
+
+  describe('POST /api/v1/documents/bulk-upload', () => {
+    it('should upload multiple text files and return 201 Created', async () => {
+      const mockResult = {
+        message: '2 document(s) queued for ingestion',
+        count: 2,
+        documents: [
+          { id: 'f1', title: 'test1', status: DocumentStatus.PENDING },
+          { id: 'f2', title: 'test2', status: DocumentStatus.PENDING },
+        ],
+      };
+      documentsServiceMock.submitDocumentsBulk.mockResolvedValue(mockResult);
+
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/documents/bulk-upload')
+        .attach('files', Buffer.from('Content of test file one'), 'test1.txt')
+        .attach('files', Buffer.from('Content of test file two'), 'test2.txt')
+        .expect(201);
+
+      expect(response.body).toEqual(mockResult);
+      expect(documentsServiceMock.submitDocumentsBulk).toHaveBeenCalled();
+    });
+
+    it('should return 400 Bad Request if no files attached', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/documents/bulk-upload')
+        .expect(400);
+    });
+  });
+
+  describe('POST /api/v1/documents/bulk-delete', () => {
+    it('should delete documents by IDs and return 200 OK', async () => {
+      const mockResult = {
+        message: '2 document(s) and associated chunks deleted successfully',
+        deletedCount: 2,
+        deletedIds: [
+          'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+          'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+        ],
+        notFoundIds: [],
+      };
+      documentsServiceMock.removeBulk.mockResolvedValue(mockResult);
+
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/documents/bulk-delete')
+        .send({
+          ids: [
+            'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+            'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+          ],
+        })
+        .expect(200);
+
+      expect(response.body).toEqual(mockResult);
+      expect(documentsServiceMock.removeBulk).toHaveBeenCalledWith(
+        [
+          'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+          'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+        ],
+        null,
+      );
+    });
+
+    it('should return 400 Bad Request if ids array has invalid UUIDs', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/documents/bulk-delete')
+        .send({ ids: ['not-a-valid-uuid'] })
+        .expect(400);
+    });
+  });
+
+  describe('DELETE /api/v1/documents/bulk', () => {
+    it('should delete documents via DELETE method and return 200 OK', async () => {
+      const mockResult = {
+        message: '1 document(s) and associated chunks deleted successfully',
+        deletedCount: 1,
+        deletedIds: ['f47ac10b-58cc-4372-a567-0e02b2c3d479'],
+        notFoundIds: [],
+      };
+      documentsServiceMock.removeBulk.mockResolvedValue(mockResult);
+
+      const response = await request(app.getHttpServer())
+        .delete('/api/v1/documents/bulk')
+        .send({
+          ids: ['f47ac10b-58cc-4372-a567-0e02b2c3d479'],
+        })
+        .expect(200);
+
+      expect(response.body).toEqual(mockResult);
+      expect(documentsServiceMock.removeBulk).toHaveBeenCalledWith(
+        ['f47ac10b-58cc-4372-a567-0e02b2c3d479'],
+        null,
       );
     });
   });

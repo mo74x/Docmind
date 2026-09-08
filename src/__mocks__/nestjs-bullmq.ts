@@ -32,6 +32,7 @@ export function OnWorkerEvent(_event: string): MethodDecorator {
 
 const mockQueue = {
   add: () => Promise.resolve({ id: 'mock-job-id' }),
+  addBulk: () => Promise.resolve([]),
   process: () => Promise.resolve(),
 };
 

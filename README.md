@@ -77,7 +77,7 @@ The platform provides **Prometheus-compatible metrics** for real-time observabil
 | **Security** | Multi-Tenancy & RBAC | Enterprise workspace isolation (`/workspaces`) with dual-mode authentication (Super Admin master key vs scoped workspace secret tokens), strict SQL partition filtering, and tenant-partitioned Redis caching. |
 | **Ingestion** | Multi-Format File Upload | Upload binary documents (`.pdf`, `.docx`, `.txt` up to 10MB) via `POST /documents/upload` with automatic text extraction, title sanitization, and background RAG queueing. |
 | **Ingestion** | Asynchronous Pipeline | Ingest large texts without blocking HTTP clients. Track lifecycle states (`PENDING` → `CHUNKING` → `EMBEDDING` → `READY` / `FAILED`) in real-time. |
-| **Documents** | Scalable Pagination | TypeORM `findAndCount` pagination supporting `page`, `limit` (1-100), and `order` (`ASC`/`DESC`), with automatic cascade deletion of chunks on document removal. |
+| **Documents** | Scalable Pagination & Bulk Operations | TypeORM `findAndCount` pagination and batch endpoints (`POST /documents/bulk`, `POST /documents/bulk-upload`, `POST /documents/bulk-delete`) with atomic BullMQ `addBulk` queuing and cascading chunk purge. |
 | **Chunking** | Context-Preserving | Boundary-aware splitting prioritizes word structures with sliding window overlaps to prevent semantic cutoff. |
 | **Vector DB** | Native PostgreSQL | Utilizes PostgreSQL with `pgvector` and an `ivfflat` cosine similarity index for fast vector search without external vector DB overhead. |
 | **Retrieval** | Hybrid Search & RRF | Combines dense vector similarity (`<->`) with PostgreSQL full-text search (`tsvector` + `GIN`) via Reciprocal Rank Fusion ($k=60$) for optimal semantic and exact-keyword recall. |
@@ -88,7 +88,7 @@ The platform provides **Prometheus-compatible metrics** for real-time observabil
 | **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
 | **DevOps** | Multi-Stage Docker | Hardened multi-stage `Dockerfile` (Node 20 Alpine, unprivileged `node` user) with `docker-compose.yml` orchestrating API, PostgreSQL (`pgvector`), and Redis with healthchecks. |
 | **Observability** | Prometheus + Winston | Production-grade metrics (`/metrics`) with custom histograms and counters, plus structured JSON logging with timestamps and execution deltas. |
-| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites (210 total passing tests: 161 unit, 49 E2E) covering 100% of critical paths with isolated in-memory test mocks. |
+| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites (228 total passing tests: 172 unit, 56 E2E) covering 100% of critical paths with isolated in-memory test mocks. |
 | **Docs** | Interactive Swagger | Comprehensive OpenAPI spec with API Key security definitions and multipart file upload schemas at `/api/docs`. |
 
 ---
@@ -837,7 +837,106 @@ Uploads a document file (`multipart/form-data`) for automated text extraction an
 }
 ```
 
-#### 7. List Documents
+#### 7. Bulk Ingest Documents (JSON)
+`POST /api/v1/documents/bulk`
+
+Queues up to 100 documents for batch background chunking, embedding, and vector indexing in a single request. Jobs are enqueued into BullMQ using an atomic Redis pipeline operation (`addBulk`).
+
+**Request Body**
+```json
+{
+  "documents": [
+    {
+      "title": "Document 1",
+      "content": "Enterprise-grade RAG pipeline documentation content..."
+    },
+    {
+      "title": "Document 2",
+      "content": "Hybrid vector and full-text search with RRF..."
+    }
+  ]
+}
+```
+
+**Response (`201 Created`)**
+```json
+{
+  "message": "2 document(s) queued for ingestion",
+  "count": 2,
+  "documents": [
+    {
+      "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+      "title": "Document 1",
+      "status": "PENDING",
+      "workspaceId": null
+    },
+    {
+      "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "title": "Document 2",
+      "status": "PENDING",
+      "workspaceId": null
+    }
+  ]
+}
+```
+
+#### 8. Bulk Upload Document Files (Multipart)
+`POST /api/v1/documents/bulk-upload`
+
+Uploads up to 10 document files (`multipart/form-data`, max 10MB each) in parallel. Extracts text, sanitizes filenames to titles, and queues background ingestion.
+
+**Form Data Fields**
+| Field | Type | Required | Description |
+|:---|:---|:---|:---|
+| `files` | binary[] | **Yes** | Up to 10 files (`.pdf`, `.docx`, `.txt`, max 10MB each). |
+| `workspaceId` | string | No | Optional workspace identifier for tenant scoping. |
+
+**Response (`201 Created`)**
+```json
+{
+  "message": "2 document(s) queued for ingestion",
+  "count": 2,
+  "documents": [
+    {
+      "id": "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+      "title": "whitepaper",
+      "status": "PENDING",
+      "workspaceId": null
+    }
+  ]
+}
+```
+
+#### 9. Bulk Delete Documents
+`POST /api/v1/documents/bulk-delete`  
+`DELETE /api/v1/documents/bulk`
+
+Deletes up to 100 documents and purges all associated text chunks and vector embeddings in batch. Enforces strict tenant isolation—tenant API keys can only delete documents belonging to their workspace.
+
+**Request Body**
+```json
+{
+  "ids": [
+    "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+    "e3b0c442-98fc-1c14-9afb-4c8996fb9242"
+  ]
+}
+```
+
+**Response (`200 OK`)**
+```json
+{
+  "message": "2 document(s) and associated chunks deleted successfully",
+  "deletedCount": 2,
+  "deletedIds": [
+    "c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b",
+    "e3b0c442-98fc-1c14-9afb-4c8996fb9242"
+  ],
+  "notFoundIds": []
+}
+```
+
+#### 10. List Documents
 `GET /api/v1/documents`
 
 Retrieves a paginated list of ingested documents ordered chronologically. Automatically filtered by workspace if authenticated via workspace-scoped API key or `x-workspace-id` header.
@@ -872,7 +971,7 @@ Retrieves a paginated list of ingested documents ordered chronologically. Automa
 }
 ```
 
-#### 8. Get Document Status
+#### 11. Get Document Status
 `GET /api/v1/documents/:id`
 
 **Response (`200 OK`)**
@@ -886,7 +985,7 @@ Retrieves a paginated list of ingested documents ordered chronologically. Automa
 }
 ```
 
-#### 9. Delete Document
+#### 12. Delete Document
 `DELETE /api/v1/documents/:id`
 
 Deletes a document record and purges all associated text chunks and vector embeddings from PostgreSQL.
@@ -899,7 +998,7 @@ Deletes a document record and purges all associated text chunks and vector embed
 }
 ```
 
-#### 10. Stream Ingestion Progress (SSE)
+#### 13. Stream Ingestion Progress (SSE)
 `GET /api/v1/documents/:id/progress`
 
 Establishes a real-time **Server-Sent Events (SSE)** connection streaming progress updates as the document moves through the ingestion queue (`PENDING` → `CHUNKING` 25% → `EMBEDDING` 50%..90% → `READY` 100% or `FAILED`).
@@ -926,7 +1025,7 @@ data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"READY","per
 
 ### Query & Retrieval Endpoints
 
-#### 11. Semantic Vector & Hybrid Search
+#### 14. Semantic Vector & Hybrid Search
 `POST /api/v1/query/search`
 
 Retrieves relevant document chunks using dense vector similarity (`<->`), full-text lexical search (`tsvector`), or **Reciprocal Rank Fusion (RRF)** hybrid retrieval. Throttled to **20 requests/minute**.
@@ -968,7 +1067,7 @@ Retrieves relevant document chunks using dense vector similarity (`<->`), full-t
 > $\text{RRF Score} = \frac{1}{60 + \text{rank}_{\text{dense}}} + \frac{1}{60 + \text{rank}_{\text{fts}}}$  
 > This balances deep conceptual semantic matches with exact keyword recall (acronyms, IDs, and error codes).
 
-#### 12. Ask Question (RAG with Citations)
+#### 15. Ask Question (RAG with Citations)
 `POST /api/v1/query/ask`
 
 Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a grounded answer with inline citations, and caches the result in Redis. Throttled to **5 requests/minute**.
@@ -997,7 +1096,7 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 }
 ```
 
-#### 13. Stream RAG Answer (Token-by-Token SSE)
+#### 16. Stream RAG Answer (Token-by-Token SSE)
 `GET /api/v1/query/ask/stream` & `POST /api/v1/query/ask/stream`
 
 Streams AI-synthesized responses token-by-token via Server-Sent Events (`text/event-stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. Throttled to **5 requests/minute**.
@@ -1042,7 +1141,7 @@ data: {"type":"done","isCached":false}
 
 ### Chat & Conversational Memory Endpoints
 
-#### 14. Create Chat Session
+#### 17. Create Chat Session
 `POST /api/v1/chat/sessions`
 
 Creates a new multi-turn conversation session.
@@ -1066,7 +1165,7 @@ Creates a new multi-turn conversation session.
 }
 ```
 
-#### 15. List Chat Sessions
+#### 18. List Chat Sessions
 `GET /api/v1/chat/sessions?page=1&limit=10&order=DESC`
 
 Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt`). Automatically scoped to tenant if workspace credentials are provided.
@@ -1093,7 +1192,7 @@ Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt
 }
 ```
 
-#### 16. Get Chat Session with Messages
+#### 19. Get Chat Session with Messages
 `GET /api/v1/chat/sessions/:id`  
 `GET /api/v1/chat/sessions/:id?page=1&limit=50&order=ASC`
 
@@ -1149,7 +1248,7 @@ Retrieves the session metadata along with paginated chronological message histor
 }
 ```
 
-#### 17. List Chat Messages (Paginated)
+#### 20. List Chat Messages (Paginated)
 `GET /api/v1/chat/sessions/:id/messages?page=1&limit=50&order=ASC`
 
 Retrieves a paginated list of chat messages for a specific session without returning the outer session entity.
@@ -1184,7 +1283,7 @@ Retrieves a paginated list of chat messages for a specific session without retur
 }
 ```
 
-#### 18. Send Message (Multi-Turn Conversational RAG)
+#### 21. Send Message (Multi-Turn Conversational RAG)
 `POST /api/v1/chat/sessions/:id/messages`
 
 Sends a user message into a chat session. The backend automatically condenses previous message turns into a standalone query via OpenAI, retrieves grounded context using Hybrid Search (RRF), synthesizes the assistant response with inline citations, and persists both turns into PostgreSQL.
@@ -1236,7 +1335,7 @@ Sends a user message into a chat session. The backend automatically condenses pr
 }
 ```
 
-#### 19. Stream Conversational Message (SSE)
+#### 22. Stream Conversational Message (SSE)
 `GET /api/v1/chat/sessions/:id/messages/stream?content=...&mode=hybrid`  
 `POST /api/v1/chat/sessions/:id/messages/stream`
 
@@ -1258,7 +1357,7 @@ curl -N -X POST http://localhost:3000/api/v1/chat/sessions/e3b0c442-98fc-1c14-9a
   -d '{"content": "What is its default overlap size?", "mode": "hybrid", "limit": 3}'
 ```
 
-#### 20. Delete Chat Session
+#### 23. Delete Chat Session
 `DELETE /api/v1/chat/sessions/:id`
 
 Deletes the session and cascade deletes all contained messages.
@@ -1275,7 +1374,7 @@ Deletes the session and cascade deletes all contained messages.
 
 ### Observability Endpoints
 
-#### 21. Prometheus Metrics
+#### 24. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -1313,7 +1412,7 @@ vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
 ```
 
-#### 22. Health Check
+#### 25. Health Check
 `GET /health`
 
 Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.
@@ -1561,7 +1660,19 @@ curl -X POST http://localhost:3000/api/v1/documents/upload \
   -F "file=@./whitepaper.pdf" \
   -F "title=Whitepaper Architecture"
 
-# 3. Stream document ingestion progress in real-time (SSE)
+# 3. Bulk ingest documents (JSON array)
+curl -X POST http://localhost:3000/api/v1/documents/bulk \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
+  -d '{"documents": [{"title": "Doc 1", "content": "First document content..."}, {"title": "Doc 2", "content": "Second document content..."}]}'
+
+# 4. Bulk delete documents by IDs
+curl -X POST http://localhost:3000/api/v1/documents/bulk-delete \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
+  -d '{"ids": ["c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b", "e3b0c442-98fc-1c14-9afb-4c8996fb9242"]}'
+
+# 5. Stream document ingestion progress in real-time (SSE)
 curl -N -H "Accept: text/event-stream" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   http://localhost:3000/api/v1/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b/progress

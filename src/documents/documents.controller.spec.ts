@@ -23,6 +23,11 @@ describe('DocumentsController', () => {
   beforeEach(async () => {
     service = {
       submitDocument: jest.fn().mockResolvedValue(mockDocument),
+      submitDocumentsBulk: jest.fn().mockResolvedValue({
+        message: '1 document(s) queued for ingestion',
+        count: 1,
+        documents: [mockDocument],
+      }),
       findAll: jest.fn().mockResolvedValue({
         data: [mockDocument],
         meta: {
@@ -38,6 +43,12 @@ describe('DocumentsController', () => {
       remove: jest.fn().mockResolvedValue({
         message: 'Document and associated chunks deleted successfully',
         id: 'mock-doc-uuid',
+      }),
+      removeBulk: jest.fn().mockResolvedValue({
+        message: '1 document(s) and associated chunks deleted successfully',
+        deletedCount: 1,
+        deletedIds: ['mock-doc-uuid'],
+        notFoundIds: [],
       }),
       getProgressStream: jest.fn(),
     };
@@ -148,6 +159,102 @@ describe('DocumentsController', () => {
         status: DocumentStatus.PENDING,
         workspaceId: undefined,
       });
+    });
+  });
+
+  describe('ingestBulk', () => {
+    it('should submit documents in bulk via service', async () => {
+      const dto = {
+        documents: [
+          { title: 'Doc 1', content: 'Content 1' },
+          { title: 'Doc 2', content: 'Content 2' },
+        ],
+      };
+
+      const result = await controller.ingestBulk(dto, null);
+
+      expect(service.submitDocumentsBulk).toHaveBeenCalledWith(dto, null);
+      expect(result).toHaveProperty('count', 1);
+    });
+
+    it('should pass workspaceId to service', async () => {
+      const dto = { documents: [{ title: 'Doc 1', content: 'Content 1' }] };
+
+      await controller.ingestBulk(dto, 'ws-bulk-1');
+
+      expect(service.submitDocumentsBulk).toHaveBeenCalledWith(
+        dto,
+        'ws-bulk-1',
+      );
+    });
+  });
+
+  describe('bulkUploadFiles', () => {
+    it('should throw BadRequestException if files array is empty', async () => {
+      await expect(controller.bulkUploadFiles([], {}, null)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should process multiple files and call submitDocumentsBulk', async () => {
+      const mockFiles = [
+        {
+          originalname: 'file1.txt',
+          mimetype: 'text/plain',
+          buffer: Buffer.from('Text of file 1'),
+          size: 14,
+        },
+        {
+          originalname: 'file2.txt',
+          mimetype: 'text/plain',
+          buffer: Buffer.from('Text of file 2'),
+          size: 14,
+        },
+      ] as Express.Multer.File[];
+
+      const result = await controller.bulkUploadFiles(
+        mockFiles,
+        {},
+        'ws-bulk-test',
+      );
+
+      expect(service.submitDocumentsBulk).toHaveBeenCalledWith(
+        {
+          documents: [
+            {
+              title: 'file1',
+              content: 'Text of file 1',
+              workspaceId: 'ws-bulk-test',
+            },
+            {
+              title: 'file2',
+              content: 'Text of file 2',
+              workspaceId: 'ws-bulk-test',
+            },
+          ],
+          workspaceId: 'ws-bulk-test',
+        },
+        'ws-bulk-test',
+      );
+      expect(result).toHaveProperty('count', 1);
+    });
+  });
+
+  describe('bulkDeletePost and bulkDelete', () => {
+    it('should delegate to service.removeBulk on bulkDeletePost', async () => {
+      const dto = { ids: ['id-1', 'id-2'] };
+      const result = await controller.bulkDeletePost(dto, 'ws-delete-1');
+
+      expect(service.removeBulk).toHaveBeenCalledWith(dto.ids, 'ws-delete-1');
+      expect(result).toHaveProperty('deletedCount', 1);
+    });
+
+    it('should delegate to service.removeBulk on bulkDelete (DELETE /bulk)', async () => {
+      const dto = { ids: ['id-1'] };
+      const result = await controller.bulkDelete(dto, null);
+
+      expect(service.removeBulk).toHaveBeenCalledWith(dto.ids, null);
+      expect(result).toHaveProperty('deletedCount', 1);
     });
   });
 

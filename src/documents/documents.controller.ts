@@ -8,7 +8,10 @@ import {
   Query,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   BadRequestException,
+  HttpCode,
+  HttpStatus,
   Sse,
   MessageEvent,
 } from '@nestjs/common';
@@ -21,11 +24,14 @@ import {
   ApiConsumes,
   ApiBody,
 } from '@nestjs/swagger';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import 'multer';
 import { DocumentsService } from './documents.service';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
+import { BulkIngestDocumentsDto } from './dto/bulk-ingest-documents.dto';
+import { BulkUploadDocumentsDto } from './dto/bulk-upload-documents.dto';
+import { BulkDeleteDocumentsDto } from './dto/bulk-delete-documents.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 import {
@@ -111,6 +117,111 @@ export class DocumentsController {
       status: document.status,
       workspaceId: document.workspaceId,
     };
+  }
+
+  @Post('bulk')
+  @ApiOperation({
+    summary: 'Submit multiple documents in bulk for RAG ingestion',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Documents queued for ingestion in bulk',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed on documents array',
+  })
+  async ingestBulk(
+    @Body() dto: BulkIngestDocumentsDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    const effectiveWorkspaceId = workspaceId || dto.workspaceId || null;
+    return this.documentsService.submitDocumentsBulk(dto, effectiveWorkspaceId);
+  }
+
+  @Post('bulk-upload')
+  @ApiOperation({
+    summary:
+      'Upload multiple document files (PDF, DOCX, TXT) for batch RAG ingestion',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description:
+      'Multiple document files (up to 10 files, 10MB each) and optional workspace scoping',
+    type: BulkUploadDocumentsDto,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Documents uploaded and queued for ingestion in bulk',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'No files provided, unsupported format, or files exceed size limit',
+  })
+  @UseInterceptors(
+    FilesInterceptor('files', 10, {
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
+    }),
+  )
+  async bulkUploadFiles(
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body() dto: BulkUploadDocumentsDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    if (!files || files.length === 0) {
+      throw new BadRequestException('At least one file is required');
+    }
+
+    const effectiveWorkspaceId = workspaceId || dto?.workspaceId || null;
+
+    const parsedDocuments: IngestDocumentDto[] = [];
+    for (const file of files) {
+      const content = await extractTextFromFile(file);
+      const title = sanitizeTitleFromFilename(file.originalname);
+      parsedDocuments.push({
+        title,
+        content,
+        workspaceId: effectiveWorkspaceId,
+      });
+    }
+
+    return this.documentsService.submitDocumentsBulk(
+      { documents: parsedDocuments, workspaceId: effectiveWorkspaceId },
+      effectiveWorkspaceId,
+    );
+  }
+
+  @Post('bulk-delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete multiple documents and their vector chunks by IDs',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bulk deletion summary with deleted and not found IDs',
+  })
+  async bulkDeletePost(
+    @Body() dto: BulkDeleteDocumentsDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    return this.documentsService.removeBulk(dto.ids, workspaceId);
+  }
+
+  @Delete('bulk')
+  @ApiOperation({
+    summary:
+      'Delete multiple documents and their vector chunks by IDs (HTTP DELETE)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bulk deletion summary with deleted and not found IDs',
+  })
+  async bulkDelete(
+    @Body() dto: BulkDeleteDocumentsDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ) {
+    return this.documentsService.removeBulk(dto.ids, workspaceId);
   }
 
   @Get()

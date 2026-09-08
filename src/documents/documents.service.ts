@@ -1,12 +1,15 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Injectable, NotFoundException, MessageEvent } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Observable } from 'rxjs';
 import { Document, DocumentStatus } from './document.entity';
 import { Chunk } from './chunk.entity';
 import { IngestDocumentDto } from './dto/ingest-document.dto';
+import { BulkIngestDocumentsDto } from './dto/bulk-ingest-documents.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
 import {
@@ -52,6 +55,58 @@ export class DocumentsService {
     );
 
     return savedDocument;
+  }
+
+  async submitDocumentsBulk(
+    dto: BulkIngestDocumentsDto,
+    workspaceId?: string | null,
+  ): Promise<{
+    message: string;
+    count: number;
+    documents: Array<{
+      id: string;
+      title: string;
+      status: DocumentStatus;
+      workspaceId: string | null;
+    }>;
+  }> {
+    const defaultWorkspaceId = workspaceId ?? dto.workspaceId ?? null;
+
+    const entities = dto.documents.map((doc) =>
+      this.documentRepo.create({
+        title: doc.title.trim(),
+        sourceContent: doc.content,
+        workspaceId: workspaceId ?? doc.workspaceId ?? defaultWorkspaceId,
+      }),
+    );
+
+    const savedDocuments = await this.documentRepo.save(entities);
+
+    // Enqueue all ingestion jobs in a single atomic BullMQ operation
+    const jobs = savedDocuments.map((doc) => ({
+      name: 'ingest-doc',
+      data: {
+        documentId: doc.id,
+      },
+      opts: {
+        attempts: 3,
+        backoff: { type: 'exponential' as const, delay: 2000 },
+        removeOnFail: false,
+      },
+    }));
+
+    await this.ingestionQueue.addBulk(jobs);
+
+    return {
+      message: `${savedDocuments.length} document(s) queued for ingestion`,
+      count: savedDocuments.length,
+      documents: savedDocuments.map((doc) => ({
+        id: doc.id,
+        title: doc.title,
+        status: doc.status,
+        workspaceId: doc.workspaceId,
+      })),
+    };
   }
 
   async findAll(
@@ -104,6 +159,51 @@ export class DocumentsService {
     return {
       message: 'Document and associated chunks deleted successfully',
       id: document.id,
+    };
+  }
+
+  async removeBulk(
+    ids: string[],
+    workspaceId?: string | null,
+  ): Promise<{
+    message: string;
+    deletedCount: number;
+    deletedIds: string[];
+    notFoundIds: string[];
+  }> {
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length === 0) {
+      return {
+        message: '0 document(s) deleted successfully',
+        deletedCount: 0,
+        deletedIds: [],
+        notFoundIds: [],
+      };
+    }
+
+    const whereCondition: any = { id: In(uniqueIds) };
+    if (workspaceId) {
+      whereCondition.workspaceId = workspaceId;
+    }
+
+    const matchingDocuments = await this.documentRepo.find({
+      where: whereCondition,
+      select: { id: true },
+    });
+
+    const deletedIds = matchingDocuments.map((doc) => doc.id);
+    const notFoundIds = uniqueIds.filter((id) => !deletedIds.includes(id));
+
+    if (deletedIds.length > 0) {
+      await this.chunkRepo.delete({ documentId: In(deletedIds) });
+      await this.documentRepo.delete({ id: In(deletedIds) });
+    }
+
+    return {
+      message: `${deletedIds.length} document(s) and associated chunks deleted successfully`,
+      deletedCount: deletedIds.length,
+      deletedIds,
+      notFoundIds,
     };
   }
 

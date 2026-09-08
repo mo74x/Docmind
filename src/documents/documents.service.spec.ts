@@ -27,6 +27,7 @@ describe('DocumentsService', () => {
   };
   let ingestionQueueMock: {
     add: jest.Mock;
+    addBulk: jest.Mock;
   };
   let eventsServiceMock: {
     onProgress: jest.Mock;
@@ -50,6 +51,7 @@ describe('DocumentsService', () => {
 
     ingestionQueueMock = {
       add: jest.fn(),
+      addBulk: jest.fn().mockResolvedValue([]),
     };
 
     eventsServiceMock = {
@@ -150,6 +152,75 @@ describe('DocumentsService', () => {
         title: dto.title,
         sourceContent: dto.content,
         workspaceId: 'ws-override-2',
+      });
+    });
+  });
+
+  describe('submitDocumentsBulk', () => {
+    it('should create entities, save them in batch, and enqueue jobs via addBulk', async () => {
+      const dto = {
+        documents: [
+          { title: 'Doc 1', content: 'Content 1' },
+          { title: 'Doc 2', content: 'Content 2' },
+        ],
+      };
+
+      const mockSaved = [
+        {
+          id: 'doc-bulk-1',
+          title: 'Doc 1',
+          sourceContent: 'Content 1',
+          status: DocumentStatus.PENDING,
+          workspaceId: null,
+        },
+        {
+          id: 'doc-bulk-2',
+          title: 'Doc 2',
+          sourceContent: 'Content 2',
+          status: DocumentStatus.PENDING,
+          workspaceId: null,
+        },
+      ];
+
+      documentRepoMock.create.mockImplementation((item) => ({ ...item }));
+      documentRepoMock.save.mockResolvedValue(mockSaved);
+
+      const result = await service.submitDocumentsBulk(dto);
+
+      expect(documentRepoMock.create).toHaveBeenCalledTimes(2);
+      expect(documentRepoMock.save).toHaveBeenCalled();
+      expect(ingestionQueueMock.addBulk).toHaveBeenCalledWith([
+        {
+          name: 'ingest-doc',
+          data: { documentId: 'doc-bulk-1' },
+          opts: expect.objectContaining({ attempts: 3, removeOnFail: false }),
+        },
+        {
+          name: 'ingest-doc',
+          data: { documentId: 'doc-bulk-2' },
+          opts: expect.objectContaining({ attempts: 3, removeOnFail: false }),
+        },
+      ]);
+      expect(result.count).toBe(2);
+      expect(result.documents).toHaveLength(2);
+    });
+
+    it('should assign workspaceId to all documents in batch when provided', async () => {
+      const dto = {
+        documents: [{ title: 'Doc 1', content: 'Content 1' }],
+      };
+
+      documentRepoMock.create.mockImplementation((item) => ({ ...item }));
+      documentRepoMock.save.mockResolvedValue([
+        { id: 'doc-1', title: 'Doc 1', workspaceId: 'ws-bulk-tenant' },
+      ]);
+
+      await service.submitDocumentsBulk(dto, 'ws-bulk-tenant');
+
+      expect(documentRepoMock.create).toHaveBeenCalledWith({
+        title: 'Doc 1',
+        sourceContent: 'Content 1',
+        workspaceId: 'ws-bulk-tenant',
       });
     });
   });
@@ -367,6 +438,53 @@ describe('DocumentsService', () => {
       });
       expect(chunkRepoMock.delete).not.toHaveBeenCalled();
       expect(documentRepoMock.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeBulk', () => {
+    it('should delete matching documents and chunks in bulk, reporting deleted and notFound IDs', async () => {
+      const ids = ['doc-1', 'doc-2', 'doc-notfound'];
+      const mockFound = [{ id: 'doc-1' }, { id: 'doc-2' }];
+
+      documentRepoMock.find.mockResolvedValue(mockFound);
+      chunkRepoMock.delete.mockResolvedValue({ affected: 4 });
+      documentRepoMock.delete.mockResolvedValue({ affected: 2 });
+
+      const result = await service.removeBulk(ids);
+
+      expect(documentRepoMock.find).toHaveBeenCalledWith({
+        where: expect.anything(),
+        select: { id: true },
+      });
+      expect(chunkRepoMock.delete).toHaveBeenCalledWith({
+        documentId: expect.anything(),
+      });
+      expect(documentRepoMock.delete).toHaveBeenCalledWith({
+        id: expect.anything(),
+      });
+      expect(result.deletedCount).toBe(2);
+      expect(result.deletedIds).toEqual(['doc-1', 'doc-2']);
+      expect(result.notFoundIds).toEqual(['doc-notfound']);
+    });
+
+    it('should scope deletion to workspaceId when provided', async () => {
+      const ids = ['doc-1'];
+      documentRepoMock.find.mockResolvedValue([]);
+
+      const result = await service.removeBulk(ids, 'ws-tenant-alpha');
+
+      expect(documentRepoMock.find).toHaveBeenCalledWith({
+        where: expect.objectContaining({ workspaceId: 'ws-tenant-alpha' }),
+        select: { id: true },
+      });
+      expect(result.deletedCount).toBe(0);
+      expect(result.notFoundIds).toEqual(['doc-1']);
+    });
+
+    it('should return immediately when given an empty IDs list', async () => {
+      const result = await service.removeBulk([]);
+      expect(result.deletedCount).toBe(0);
+      expect(documentRepoMock.find).not.toHaveBeenCalled();
     });
   });
 
