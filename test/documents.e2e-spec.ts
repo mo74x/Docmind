@@ -81,7 +81,10 @@ describe('DocumentsController (e2e)', () => {
         id: mockDocument.id,
         status: DocumentStatus.PENDING,
       });
-      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith(payload);
+      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith(
+        payload,
+        null,
+      );
     });
 
     it('should return 400 Bad Request when validation fails (missing content)', async () => {
@@ -136,10 +139,13 @@ describe('DocumentsController (e2e)', () => {
         status: DocumentStatus.PENDING,
       });
 
-      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith({
-        title: 'Custom Uploaded Title',
-        content: 'DocMind is an intelligent document RAG platform.',
-      });
+      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Custom Uploaded Title',
+          content: 'DocMind is an intelligent document RAG platform.',
+        }),
+        null,
+      );
     });
 
     it('should default title to filename when title field is not provided', async () => {
@@ -160,10 +166,13 @@ describe('DocumentsController (e2e)', () => {
         status: DocumentStatus.PENDING,
       });
 
-      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith({
-        title: 'docmind-overview',
-        content: 'Plain text file content for RAG processing.',
-      });
+      expect(documentsServiceMock.submitDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'docmind-overview',
+          content: 'Plain text file content for RAG processing.',
+        }),
+        null,
+      );
     });
 
     it('should return 400 Bad Request when no file is attached', async () => {
@@ -242,6 +251,7 @@ describe('DocumentsController (e2e)', () => {
           limit: 10,
           order: 'DESC',
         }),
+        null,
       );
     });
 
@@ -271,6 +281,7 @@ describe('DocumentsController (e2e)', () => {
           limit: 5,
           order: 'ASC',
         }),
+        null,
       );
     });
 
@@ -328,6 +339,7 @@ describe('DocumentsController (e2e)', () => {
       });
       expect(documentsServiceMock.findOne).toHaveBeenCalledWith(
         mockDocument.id,
+        null,
       );
     });
 
@@ -350,7 +362,10 @@ describe('DocumentsController (e2e)', () => {
           method: 'GET',
         }),
       );
-      expect(documentsServiceMock.findOne).toHaveBeenCalledWith(nonExistentId);
+      expect(documentsServiceMock.findOne).toHaveBeenCalledWith(
+        nonExistentId,
+        null,
+      );
     });
   });
 
@@ -367,7 +382,10 @@ describe('DocumentsController (e2e)', () => {
         .expect(200);
 
       expect(response.body).toEqual(deleteResult);
-      expect(documentsServiceMock.remove).toHaveBeenCalledWith(mockDocument.id);
+      expect(documentsServiceMock.remove).toHaveBeenCalledWith(
+        mockDocument.id,
+        null,
+      );
     });
 
     it('should return 404 Not Found via AllExceptionsFilter when document to delete does not exist', async () => {
@@ -389,7 +407,10 @@ describe('DocumentsController (e2e)', () => {
           method: 'DELETE',
         }),
       );
-      expect(documentsServiceMock.remove).toHaveBeenCalledWith(nonExistentId);
+      expect(documentsServiceMock.remove).toHaveBeenCalledWith(
+        nonExistentId,
+        null,
+      );
     });
   });
 

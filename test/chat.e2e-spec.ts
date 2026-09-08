@@ -23,6 +23,8 @@ describe('ChatController - Conversational Memory (e2e)', () => {
   const sampleSessionId = '11111111-2222-3333-4444-555555555555';
 
   beforeAll(async () => {
+    process.env.API_KEY = 'test-api-key';
+    process.env.OPENAI_API_KEY = 'test-mock-key';
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
@@ -42,6 +44,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
   });
 
   afterAll(async () => {
+    delete process.env.API_KEY;
     await app.close();
   });
 
@@ -250,6 +253,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
       expect(response.body.message).toBe('Chat session deleted successfully');
       expect(chatServiceMock.deleteSession).toHaveBeenCalledWith(
         sampleSessionId,
+        null,
       );
     });
   });

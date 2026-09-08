@@ -18,10 +18,19 @@ export class Workspace {
   @Column({ type: 'varchar', length: 255, unique: true })
   slug: string;
 
-  @Index({ unique: true })
-  @Column({ type: 'varchar', length: 255, unique: true })
-  apiKey: string;
+  @Column({ type: 'varchar', length: 255 })
+  apiKeyHash?: string;
+
+  @Index()
+  @Column({ type: 'varchar', length: 32 })
+  apiKeyPrefix: string;
 
   @CreateDateColumn()
   createdAt: Date;
+
+  /**
+   * Only populated in memory immediately after workspace creation.
+   * Not persisted in database.
+   */
+  apiKey?: string;
 }

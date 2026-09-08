@@ -21,9 +21,17 @@ async function run() {
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         name varchar(255) NOT NULL,
         slug varchar(255) NOT NULL UNIQUE,
-        "apiKey" varchar(255) NOT NULL UNIQUE,
+        "apiKeyHash" varchar(255) NOT NULL,
+        "apiKeyPrefix" varchar(32) NOT NULL,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now()
       );
+    `);
+
+    // Ensure columns exist if table was previously created
+    await client.query(`
+      ALTER TABLE workspaces
+      ADD COLUMN IF NOT EXISTS "apiKeyHash" varchar(255),
+      ADD COLUMN IF NOT EXISTS "apiKeyPrefix" varchar(32);
     `);
     console.log('Verified table workspaces.');
 
@@ -32,8 +40,8 @@ async function run() {
       ON workspaces (slug);
     `);
     await client.query(`
-      CREATE INDEX IF NOT EXISTS workspaces_api_key_idx 
-      ON workspaces ("apiKey");
+      CREATE INDEX IF NOT EXISTS workspaces_api_key_prefix_idx 
+      ON workspaces ("apiKeyPrefix");
     `);
     console.log('Verified workspace indexes.');
 

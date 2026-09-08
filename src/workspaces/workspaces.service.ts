@@ -7,8 +7,15 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { Workspace } from './workspace.entity';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
+
+const PREFIX_LENGTH = 15;
+
+function getApiKeyPrefix(key: string): string {
+  return key.slice(0, Math.min(key.length, PREFIX_LENGTH));
+}
 
 @Injectable()
 export class WorkspacesService {
@@ -21,6 +28,7 @@ export class WorkspacesService {
 
   /**
    * Create a new workspace with unique slug and auto-generated API key if omitted.
+   * Stores hashed API key and prefix for secure identification.
    */
   async createWorkspace(dto: CreateWorkspaceDto): Promise<Workspace> {
     const slug = (
@@ -39,22 +47,37 @@ export class WorkspacesService {
       );
     }
 
-    const apiKey =
+    const rawApiKey =
       dto.apiKey?.trim() || `dcm_ws_${crypto.randomBytes(24).toString('hex')}`;
+    const apiKeyPrefix = getApiKeyPrefix(rawApiKey);
 
-    // Check apiKey uniqueness
-    const existingKey = await this.workspaceRepo.findOneBy({ apiKey });
-    if (existingKey) {
-      throw new ConflictException(`Workspace API key already in use`);
+    // Check if key is already in use by candidates with same prefix
+    const existingCandidates = await this.workspaceRepo.find({
+      where: { apiKeyPrefix },
+    });
+    for (const candidate of existingCandidates) {
+      if (
+        candidate.apiKeyHash &&
+        (await bcrypt.compare(rawApiKey, candidate.apiKeyHash))
+      ) {
+        throw new ConflictException(`Workspace API key already in use`);
+      }
     }
+
+    const apiKeyHash = await bcrypt.hash(rawApiKey, 12);
 
     const workspace = this.workspaceRepo.create({
       name: dto.name.trim(),
       slug,
-      apiKey,
+      apiKeyHash,
+      apiKeyPrefix,
     });
 
     const saved = await this.workspaceRepo.save(workspace);
+    // Attach raw API key in-memory once so the caller receives it upon creation
+    saved.apiKey = rawApiKey;
+    delete saved.apiKeyHash;
+
     this.logger.log(
       `Created workspace "${saved.name}" (${saved.id}) with slug "${saved.slug}"`,
     );
@@ -65,9 +88,11 @@ export class WorkspacesService {
    * Retrieve all workspaces.
    */
   async findAll(): Promise<Workspace[]> {
-    return this.workspaceRepo.find({
+    const workspaces = await this.workspaceRepo.find({
       order: { createdAt: 'DESC' },
     });
+    workspaces.forEach((w) => delete w.apiKeyHash);
+    return workspaces;
   }
 
   /**
@@ -78,6 +103,7 @@ export class WorkspacesService {
     if (!workspace) {
       throw new NotFoundException(`Workspace with ID ${id} not found`);
     }
+    delete workspace.apiKeyHash;
     return workspace;
   }
 
@@ -85,14 +111,38 @@ export class WorkspacesService {
    * Retrieve a workspace by its unique slug.
    */
   async findBySlug(slug: string): Promise<Workspace | null> {
-    return this.workspaceRepo.findOneBy({ slug });
+    const workspace = await this.workspaceRepo.findOneBy({ slug });
+    if (workspace) {
+      delete workspace.apiKeyHash;
+    }
+    return workspace;
   }
 
   /**
    * Retrieve a workspace by its secret API key.
+   * Compares provided key against hashed keys in the database.
    */
   async findByApiKey(apiKey: string): Promise<Workspace | null> {
-    return this.workspaceRepo.findOneBy({ apiKey });
+    if (!apiKey || typeof apiKey !== 'string') {
+      return null;
+    }
+
+    const apiKeyPrefix = getApiKeyPrefix(apiKey);
+    const candidates = await this.workspaceRepo.find({
+      where: { apiKeyPrefix },
+    });
+
+    for (const candidate of candidates) {
+      if (candidate.apiKeyHash) {
+        const isMatch = await bcrypt.compare(apiKey, candidate.apiKeyHash);
+        if (isMatch) {
+          delete candidate.apiKeyHash;
+          return candidate;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**

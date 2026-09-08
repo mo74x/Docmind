@@ -32,5 +32,5 @@ export class IngestDocumentDto {
   })
   @IsOptional()
   @IsUUID()
-  workspaceId?: string;
+  workspaceId?: string | null;
 }

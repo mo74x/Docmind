@@ -46,7 +46,7 @@ import { AppService } from './app.service';
         type: 'postgres',
         url: configService.get<string>('database.url'),
         entities: [Document, Chunk, ChatSession, ChatMessage, Workspace],
-        synchronize: true,
+        synchronize: process.env.NODE_ENV !== 'production',
       }),
     }),
     BullModule.forRootAsync({

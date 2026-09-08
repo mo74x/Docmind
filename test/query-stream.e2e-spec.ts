@@ -104,6 +104,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
           query: 'What is DocMind',
           limit: 3,
         }),
+        null,
       );
     });
 
@@ -182,6 +183,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
           query: 'Non-existent topic query',
           limit: 5,
         }),
+        null,
       );
     });
 

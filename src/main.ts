@@ -7,6 +7,7 @@ import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -30,6 +31,39 @@ async function bootstrap() {
     }),
   });
   const configService = app.get(ConfigService);
+
+  // Security headers with helmet
+  app.use(
+    helmet({
+      contentSecurityPolicy:
+        process.env.NODE_ENV === 'production' ? undefined : false,
+    }),
+  );
+
+  // Configure CORS
+  const isProduction = process.env.NODE_ENV === 'production';
+  const corsOriginsConfig = configService.get<string>('corsOrigins');
+  const allowedOrigins = corsOriginsConfig
+    ? corsOriginsConfig
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    : [];
+
+  app.enableCors({
+    origin: isProduction && allowedOrigins.length > 0 ? allowedOrigins : true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-api-key',
+      'x-workspace-id',
+    ],
+    credentials: true,
+  });
+
+  // Enable graceful shutdown hooks
+  app.enableShutdownHooks();
 
   // Enable global exception filter
   app.useGlobalFilters(new AllExceptionsFilter());
