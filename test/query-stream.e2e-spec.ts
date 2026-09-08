@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { AnswerService } from '../src/query/answer.service';
@@ -32,6 +36,13 @@ describe('QueryController - Streaming RAG (e2e)', () => {
         transform: true,
       }),
     );
+    app.setGlobalPrefix('api', {
+      exclude: ['/', 'health', 'metrics'],
+    });
+    app.enableVersioning({
+      type: VersioningType.URI,
+      defaultVersion: '1',
+    });
     await app.init();
   });
 
@@ -43,7 +54,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
     jest.clearAllMocks();
   });
 
-  describe('GET /query/ask/stream', () => {
+  describe('GET /api/v1/query/ask/stream', () => {
     it('should return 200 OK with text/event-stream and stream sources, tokens, and done event', async () => {
       const mockEvents = [
         {
@@ -82,7 +93,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
       answerServiceMock.askQuestionStream.mockReturnValue(of(...mockEvents));
 
       const response = await request(app.getHttpServer())
-        .get('/query/ask/stream?query=What+is+DocMind&limit=3')
+        .get('/api/v1/query/ask/stream?query=What+is+DocMind&limit=3')
         .expect(200)
         .expect('Content-Type', /text\/event-stream/);
 
@@ -110,7 +121,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
 
     it('should return 400 Bad Request via AllExceptionsFilter when query parameter is missing', async () => {
       const response = await request(app.getHttpServer())
-        .get('/query/ask/stream')
+        .get('/api/v1/query/ask/stream')
         .expect(400);
 
       expect(response.body.statusCode).toBe(400);
@@ -123,7 +134,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
 
     it('should return 400 Bad Request when limit is out of range', async () => {
       const response = await request(app.getHttpServer())
-        .get('/query/ask/stream?query=test&limit=99')
+        .get('/api/v1/query/ask/stream?query=test&limit=99')
         .expect(400);
 
       expect(response.body.statusCode).toBe(400);
@@ -134,7 +145,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
     });
   });
 
-  describe('POST /query/ask/stream', () => {
+  describe('POST /api/v1/query/ask/stream', () => {
     it('should return 200 OK with text/event-stream and stream responses from JSON body payload', async () => {
       const mockEvents = [
         {
@@ -160,7 +171,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
       answerServiceMock.askQuestionStream.mockReturnValue(of(...mockEvents));
 
       const response = await request(app.getHttpServer())
-        .post('/query/ask/stream')
+        .post('/api/v1/query/ask/stream')
         .send({
           query: 'Non-existent topic query',
           limit: 5,
@@ -189,7 +200,7 @@ describe('QueryController - Streaming RAG (e2e)', () => {
 
     it('should return 400 Bad Request when POST body query is empty', async () => {
       const response = await request(app.getHttpServer())
-        .post('/query/ask/stream')
+        .post('/api/v1/query/ask/stream')
         .send({ query: '' })
         .expect(400);
 

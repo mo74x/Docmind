@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ChatService } from '../src/chat/chat.service';
@@ -40,6 +44,13 @@ describe('ChatController - Conversational Memory (e2e)', () => {
         transform: true,
       }),
     );
+    app.setGlobalPrefix('api', {
+      exclude: ['/', 'health', 'metrics'],
+    });
+    app.enableVersioning({
+      type: VersioningType.URI,
+      defaultVersion: '1',
+    });
     await app.init();
   });
 
@@ -52,7 +63,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
     jest.clearAllMocks();
   });
 
-  describe('POST /chat/sessions', () => {
+  describe('POST /api/v1/chat/sessions', () => {
     it('should create a new session and return 201 Created', async () => {
       chatServiceMock.createSession.mockResolvedValue({
         id: sampleSessionId,
@@ -63,7 +74,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .post('/chat/sessions')
+        .post('/api/v1/chat/sessions')
         .set('x-api-key', 'test-api-key')
         .send({ title: 'DocMind Discussion' })
         .expect(201);
@@ -74,7 +85,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
     });
   });
 
-  describe('GET /chat/sessions', () => {
+  describe('GET /api/v1/chat/sessions', () => {
     it('should return 200 OK with paginated sessions', async () => {
       chatServiceMock.listSessions.mockResolvedValue({
         data: [
@@ -94,7 +105,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .get('/chat/sessions?page=1&limit=10')
+        .get('/api/v1/chat/sessions?page=1&limit=10')
         .set('x-api-key', 'test-api-key')
         .expect(200);
 
@@ -103,7 +114,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
     });
   });
 
-  describe('GET /chat/sessions/:id', () => {
+  describe('GET /api/v1/chat/sessions/:id', () => {
     it('should return 200 OK with session and messages', async () => {
       chatServiceMock.getSessionWithMessages.mockResolvedValue({
         id: sampleSessionId,
@@ -115,7 +126,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .get(`/chat/sessions/${sampleSessionId}`)
+        .get(`/api/v1/chat/sessions/${sampleSessionId}`)
         .set('x-api-key', 'test-api-key')
         .expect(200);
 
@@ -125,13 +136,13 @@ describe('ChatController - Conversational Memory (e2e)', () => {
 
     it('should return 400 when session id is not a valid UUID', async () => {
       await request(app.getHttpServer())
-        .get('/chat/sessions/invalid-not-uuid')
+        .get('/api/v1/chat/sessions/invalid-not-uuid')
         .set('x-api-key', 'test-api-key')
         .expect(400);
     });
   });
 
-  describe('POST /chat/sessions/:id/messages', () => {
+  describe('POST /api/v1/chat/sessions/:id/messages', () => {
     it('should send a message and return assistant answer with citations and standaloneQuery', async () => {
       chatServiceMock.sendMessage.mockResolvedValue({
         sessionId: sampleSessionId,
@@ -167,7 +178,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .post(`/chat/sessions/${sampleSessionId}/messages`)
+        .post(`/api/v1/chat/sessions/${sampleSessionId}/messages`)
         .set('x-api-key', 'test-api-key')
         .send({
           content: 'What is its chunk size?',
@@ -186,14 +197,14 @@ describe('ChatController - Conversational Memory (e2e)', () => {
 
     it('should return 400 if content is missing or empty', async () => {
       await request(app.getHttpServer())
-        .post(`/chat/sessions/${sampleSessionId}/messages`)
+        .post(`/api/v1/chat/sessions/${sampleSessionId}/messages`)
         .set('x-api-key', 'test-api-key')
         .send({ content: '' })
         .expect(400);
     });
   });
 
-  describe('GET /chat/sessions/:id/messages/stream', () => {
+  describe('GET /api/v1/chat/sessions/:id/messages/stream', () => {
     it('should return 200 OK with text/event-stream headers and stream SSE events', async () => {
       const mockEvents = [
         {
@@ -229,7 +240,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
 
       const response = await request(app.getHttpServer())
         .get(
-          `/chat/sessions/${sampleSessionId}/messages/stream?content=Tell%20me%20about%20DocMind`,
+          `/api/v1/chat/sessions/${sampleSessionId}/messages/stream?content=Tell%20me%20about%20DocMind`,
         )
         .set('x-api-key', 'test-api-key')
         .expect(200);
@@ -241,12 +252,12 @@ describe('ChatController - Conversational Memory (e2e)', () => {
     });
   });
 
-  describe('DELETE /chat/sessions/:id', () => {
+  describe('DELETE /api/v1/chat/sessions/:id', () => {
     it('should delete session and return 200 OK', async () => {
       chatServiceMock.deleteSession.mockResolvedValue(undefined);
 
       const response = await request(app.getHttpServer())
-        .delete(`/chat/sessions/${sampleSessionId}`)
+        .delete(`/api/v1/chat/sessions/${sampleSessionId}`)
         .set('x-api-key', 'test-api-key')
         .expect(200);
 

@@ -740,7 +740,7 @@ Interactive Swagger documentation is available at `http://localhost:3000/api/doc
 ### Workspaces & Multi-Tenancy Endpoints
 
 #### 1. Create Workspace
-`POST /workspaces`
+`POST /api/v1/workspaces`
 
 Creates a new isolated tenant workspace. Generates a unique scoped API key with prefix `dcm_ws_` if omitted.
 
@@ -764,7 +764,7 @@ Creates a new isolated tenant workspace. Generates a unique scoped API key with 
 ```
 
 #### 2. List Workspaces
-`GET /workspaces`
+`GET /api/v1/workspaces`
 
 Lists all workspaces registered in the system.
 
@@ -782,12 +782,12 @@ Lists all workspaces registered in the system.
 ```
 
 #### 3. Get Workspace
-`GET /workspaces/:id`
+`GET /api/v1/workspaces/:id`
 
 Retrieves workspace details by UUID.
 
 #### 4. Delete Workspace
-`DELETE /workspaces/:id`
+`DELETE /api/v1/workspaces/:id`
 
 Deletes a workspace by UUID (`204 No Content`).
 
@@ -796,7 +796,7 @@ Deletes a workspace by UUID (`204 No Content`).
 ### Documents Endpoints
 
 #### 5. Ingest Document
-`POST /documents`
+`POST /api/v1/documents`
 
 Queues a new document for background chunking, embedding, and vector indexing.
 
@@ -818,7 +818,7 @@ Queues a new document for background chunking, embedding, and vector indexing.
 ```
 
 #### 6. Upload Document File (PDF, DOCX, TXT)
-`POST /documents/upload`
+`POST /api/v1/documents/upload`
 
 Uploads a document file (`multipart/form-data`) for automated text extraction and background RAG queueing. Maximum file size is **10MB**.
 
@@ -838,7 +838,7 @@ Uploads a document file (`multipart/form-data`) for automated text extraction an
 ```
 
 #### 7. List Documents
-`GET /documents`
+`GET /api/v1/documents`
 
 Retrieves a paginated list of ingested documents ordered chronologically. Automatically filtered by workspace if authenticated via workspace-scoped API key or `x-workspace-id` header.
 
@@ -873,7 +873,7 @@ Retrieves a paginated list of ingested documents ordered chronologically. Automa
 ```
 
 #### 8. Get Document Status
-`GET /documents/:id`
+`GET /api/v1/documents/:id`
 
 **Response (`200 OK`)**
 ```json
@@ -887,7 +887,7 @@ Retrieves a paginated list of ingested documents ordered chronologically. Automa
 ```
 
 #### 9. Delete Document
-`DELETE /documents/:id`
+`DELETE /api/v1/documents/:id`
 
 Deletes a document record and purges all associated text chunks and vector embeddings from PostgreSQL.
 
@@ -900,7 +900,7 @@ Deletes a document record and purges all associated text chunks and vector embed
 ```
 
 #### 10. Stream Ingestion Progress (SSE)
-`GET /documents/:id/progress`
+`GET /api/v1/documents/:id/progress`
 
 Establishes a real-time **Server-Sent Events (SSE)** connection streaming progress updates as the document moves through the ingestion queue (`PENDING` → `CHUNKING` 25% → `EMBEDDING` 50%..90% → `READY` 100% or `FAILED`).
 
@@ -927,7 +927,7 @@ data: {"documentId":"c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b","status":"READY","per
 ### Query & Retrieval Endpoints
 
 #### 11. Semantic Vector & Hybrid Search
-`POST /query/search`
+`POST /api/v1/query/search`
 
 Retrieves relevant document chunks using dense vector similarity (`<->`), full-text lexical search (`tsvector`), or **Reciprocal Rank Fusion (RRF)** hybrid retrieval. Throttled to **20 requests/minute**.
 
@@ -969,7 +969,7 @@ Retrieves relevant document chunks using dense vector similarity (`<->`), full-t
 > This balances deep conceptual semantic matches with exact keyword recall (acronyms, IDs, and error codes).
 
 #### 12. Ask Question (RAG with Citations)
-`POST /query/ask`
+`POST /api/v1/query/ask`
 
 Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a grounded answer with inline citations, and caches the result in Redis. Throttled to **5 requests/minute**.
 
@@ -998,7 +998,7 @@ Executes the full RAG pipeline: retrieves top-k chunks, queries OpenAI for a gro
 ```
 
 #### 13. Stream RAG Answer (Token-by-Token SSE)
-`GET /query/ask/stream` & `POST /query/ask/stream`
+`GET /api/v1/query/ask/stream` & `POST /api/v1/query/ask/stream`
 
 Streams AI-synthesized responses token-by-token via Server-Sent Events (`text/event-stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. Throttled to **5 requests/minute**.
 
@@ -1043,7 +1043,7 @@ data: {"type":"done","isCached":false}
 ### Chat & Conversational Memory Endpoints
 
 #### 14. Create Chat Session
-`POST /chat/sessions`
+`POST /api/v1/chat/sessions`
 
 Creates a new multi-turn conversation session.
 
@@ -1067,7 +1067,7 @@ Creates a new multi-turn conversation session.
 ```
 
 #### 15. List Chat Sessions
-`GET /chat/sessions?page=1&limit=10&order=DESC`
+`GET /api/v1/chat/sessions?page=1&limit=10&order=DESC`
 
 Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt`). Automatically scoped to tenant if workspace credentials are provided.
 
@@ -1094,7 +1094,7 @@ Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt
 ```
 
 #### 16. Get Chat Session with Messages
-`GET /chat/sessions/:id`
+`GET /api/v1/chat/sessions/:id`
 
 Retrieves the session metadata along with its full chronological message history (`createdAt ASC`).
 
@@ -1133,7 +1133,7 @@ Retrieves the session metadata along with its full chronological message history
 ```
 
 #### 17. Send Message (Multi-Turn Conversational RAG)
-`POST /chat/sessions/:id/messages`
+`POST /api/v1/chat/sessions/:id/messages`
 
 Sends a user message into a chat session. The backend automatically condenses previous message turns into a standalone query via OpenAI, retrieves grounded context using Hybrid Search (RRF), synthesizes the assistant response with inline citations, and persists both turns into PostgreSQL.
 
@@ -1185,8 +1185,8 @@ Sends a user message into a chat session. The backend automatically condenses pr
 ```
 
 #### 18. Stream Conversational Message (SSE)
-`GET /chat/sessions/:id/messages/stream?content=...&mode=hybrid`  
-`POST /chat/sessions/:id/messages/stream`
+`GET /api/v1/chat/sessions/:id/messages/stream?content=...&mode=hybrid`  
+`POST /api/v1/chat/sessions/:id/messages/stream`
 
 Streams the conversational RAG reply token-by-token using Server-Sent Events (`text/event-stream`). Immediately emits `sources` (including the reformulated `standaloneQuery`), followed by incremental `token` deltas, and ends with a `done` event upon saving to the database.
 
@@ -1194,12 +1194,12 @@ Streams the conversational RAG reply token-by-token using Server-Sent Events (`t
 ```bash
 curl -N -H "Accept: text/event-stream" \
   -H "x-api-key: your-secret-api-key" \
-  "http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream?content=What%20is%20its%20default%20overlap%20size%3F"
+  "http://localhost:3000/api/v1/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream?content=What%20is%20its%20default%20overlap%20size%3F"
 ```
 
 **cURL Example (POST)**
 ```bash
-curl -N -X POST http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream \
+curl -N -X POST http://localhost:3000/api/v1/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -H "x-api-key: your-secret-api-key" \
@@ -1207,7 +1207,7 @@ curl -N -X POST http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c89
 ```
 
 #### 19. Delete Chat Session
-`DELETE /chat/sessions/:id`
+`DELETE /api/v1/chat/sessions/:id`
 
 Deletes the session and cascade deletes all contained messages.
 
@@ -1485,12 +1485,12 @@ npm run start:dev
 
 | Endpoint | Description |
 |:---|:---|
-| `http://localhost:3000` | API Server |
+| `http://localhost:3000` | API Server Root |
 | `http://localhost:3000/api/docs` | Interactive Swagger UI |
-| `http://localhost:3000/health` | Health Check Probe (DB & Redis) |
+| `http://localhost:3000/health` | Health Check Probe (DB, Redis & Queue) |
 | `http://localhost:3000/metrics` | Prometheus Metrics Exposition |
-| `http://localhost:3000/query/ask/stream` | Real-Time RAG Answer Streaming (SSE) |
-| `http://localhost:3000/chat/sessions/:id/messages/stream` | Conversational Chat Streaming (SSE) |
+| `http://localhost:3000/api/v1/query/ask/stream` | Real-Time RAG Answer Streaming (SSE) |
+| `http://localhost:3000/api/v1/chat/sessions/:id/messages/stream` | Conversational Chat Streaming (SSE) |
 
 ---
 
@@ -1498,13 +1498,13 @@ npm run start:dev
 
 ```bash
 # 1. Provision a tenant workspace (returns scoped API key dcm_ws_...)
-curl -X POST http://localhost:3000/workspaces \
+curl -X POST http://localhost:3000/api/v1/workspaces \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-master-api-key" \
   -d '{"name": "Engineering Team", "slug": "engineering"}'
 
 # 2. Upload a document file (PDF, DOCX, TXT) into workspace
-curl -X POST http://localhost:3000/documents/upload \
+curl -X POST http://localhost:3000/api/v1/documents/upload \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -F "file=@./whitepaper.pdf" \
   -F "title=Whitepaper Architecture"
@@ -1512,16 +1512,16 @@ curl -X POST http://localhost:3000/documents/upload \
 # 3. Stream document ingestion progress in real-time (SSE)
 curl -N -H "Accept: text/event-stream" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
-  http://localhost:3000/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b/progress
+  http://localhost:3000/api/v1/documents/c7b5f3a0-8e1d-4d74-912b-3a4d5e6f7a8b/progress
 
 # 4. Hybrid vector & full-text search with RRF scoring
-curl -X POST http://localhost:3000/query/search \
+curl -X POST http://localhost:3000/api/v1/query/search \
   -H "Content-Type: application/json" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -d '{"query": "How does DocMind handle background processing?", "limit": 3, "mode": "hybrid"}'
 
 # 5. Grounded RAG Q&A with citations (Synchronous)
-curl -X POST http://localhost:3000/query/ask \
+curl -X POST http://localhost:3000/api/v1/query/ask \
   -H "Content-Type: application/json" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -d '{"query": "How does DocMind handle background processing?"}'
@@ -1529,16 +1529,16 @@ curl -X POST http://localhost:3000/query/ask \
 # 6. Stream grounded RAG Q&A response token-by-token in real-time (SSE)
 curl -N -H "Accept: text/event-stream" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
-  "http://localhost:3000/query/ask/stream?query=How+does+DocMind+handle+background+processing%3F"
+  "http://localhost:3000/api/v1/query/ask/stream?query=How+does+DocMind+handle+background+processing%3F"
 
 # 7. Create a multi-turn chat session
-curl -X POST http://localhost:3000/chat/sessions \
+curl -X POST http://localhost:3000/api/v1/chat/sessions \
   -H "Content-Type: application/json" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \
   -d '{"title": "Architecture Q&A"}'
 
 # 8. Stream conversational message with query reformulation (SSE)
-curl -N -X POST http://localhost:3000/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream \
+curl -N -X POST http://localhost:3000/api/v1/chat/sessions/e3b0c442-98fc-1c14-9afb-4c8996fb9242/messages/stream \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -H "x-api-key: dcm_ws_7f3b890a12c45e6d7890f1a2b3c4d5e6f7a8b9c0" \

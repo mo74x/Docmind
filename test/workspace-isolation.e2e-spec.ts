@@ -3,7 +3,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { WorkspacesService } from '../src/workspaces/workspaces.service';
@@ -15,18 +19,18 @@ import { ConfigService } from '@nestjs/config';
 describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
   let app: INestApplication;
 
-  const masterApiKey = 'super-admin-master-key-12345';
+  const masterApiKey = 'dcm_master_admin_secret_key_12345';
   const wsA = {
-    id: '11111111-1111-1111-1111-111111111111',
+    id: 'ws-eng-111',
     name: 'Engineering',
     slug: 'engineering',
-    apiKey: 'dcm_ws_engineering_key_aaa',
+    apiKey: 'dcm_ws_eng_key_aaa',
     createdAt: new Date(),
   };
 
   const wsB = {
-    id: '22222222-2222-2222-2222-222222222222',
-    name: 'Human Resources',
+    id: 'ws-hr-222',
+    name: 'HR & People',
     slug: 'hr',
     apiKey: 'dcm_ws_hr_key_bbb',
     createdAt: new Date(),
@@ -84,6 +88,13 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
         transform: true,
       }),
     );
+    app.setGlobalPrefix('api', {
+      exclude: ['/', 'health', 'metrics'],
+    });
+    app.enableVersioning({
+      type: VersioningType.URI,
+      defaultVersion: '1',
+    });
     await app.init();
   });
 
@@ -101,7 +112,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       workspacesServiceMock.createWorkspace.mockResolvedValue(wsA);
 
       const res = await request(app.getHttpServer())
-        .post('/workspaces')
+        .post('/api/v1/workspaces')
         .set('x-api-key', masterApiKey)
         .send({ name: 'Engineering', slug: 'engineering' })
         .expect(201);
@@ -112,7 +123,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
 
     it('GET /workspaces - should list workspaces for authenticated caller', async () => {
       const res = await request(app.getHttpServer())
-        .get('/workspaces')
+        .get('/api/v1/workspaces')
         .set('x-api-key', masterApiKey)
         .expect(200);
 
@@ -131,7 +142,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       });
 
       const res = await request(app.getHttpServer())
-        .post('/documents')
+        .post('/api/v1/documents')
         .set('x-api-key', wsA.apiKey)
         .send({
           title: 'Backend Architecture',
@@ -155,7 +166,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       });
 
       const res = await request(app.getHttpServer())
-        .post('/documents')
+        .post('/api/v1/documents')
         .set('x-api-key', wsB.apiKey)
         .send({
           title: 'Salary Ranges',
@@ -184,7 +195,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       ]);
 
       const res = await request(app.getHttpServer())
-        .post('/query/search')
+        .post('/api/v1/query/search')
         .set('x-api-key', wsA.apiKey)
         .send({ query: 'What is the architecture?' })
         .expect(200);
@@ -209,7 +220,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       ]);
 
       const res = await request(app.getHttpServer())
-        .post('/query/search')
+        .post('/api/v1/query/search')
         .set('x-api-key', wsB.apiKey)
         .send({ query: 'Show me compensation' })
         .expect(200);
@@ -226,7 +237,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       queryServiceMock.search.mockResolvedValue([]);
 
       const res = await request(app.getHttpServer())
-        .post('/query/search')
+        .post('/api/v1/query/search')
         .set('x-api-key', masterApiKey)
         .send({ query: 'Global search across all documents' })
         .expect(200);
@@ -244,7 +255,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
       queryServiceMock.search.mockResolvedValue([]);
 
       const res = await request(app.getHttpServer())
-        .post('/query/search')
+        .post('/api/v1/query/search')
         .set('x-api-key', masterApiKey)
         .set('x-workspace-id', wsA.id)
         .send({ query: 'Scoped search as admin' })
@@ -261,7 +272,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
   describe('Cross-Tenant Spoofing Prevention', () => {
     it('should reject Workspace A key attempting to access Workspace B via x-workspace-id with 403 Forbidden', async () => {
       const res = await request(app.getHttpServer())
-        .post('/query/search')
+        .post('/api/v1/query/search')
         .set('x-api-key', wsA.apiKey)
         .set('x-workspace-id', wsB.id) // Spoof attempt
         .send({ query: 'Try reading Workspace B data' })
@@ -273,7 +284,7 @@ describe('Multi-Tenancy & Workspace Access Control (e2e)', () => {
 
     it('should reject requests with invalid API key with 401 Unauthorized', async () => {
       await request(app.getHttpServer())
-        .post('/query/search')
+        .post('/api/v1/query/search')
         .set('x-api-key', 'invalid-random-key')
         .send({ query: 'Unauthorized query' })
         .expect(401);

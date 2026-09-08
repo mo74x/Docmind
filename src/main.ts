@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
@@ -79,6 +79,15 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Configure global API routing prefix and URI-based versioning (/api/v1/...)
+  app.setGlobalPrefix('api', {
+    exclude: ['/', 'health', 'metrics'],
+  });
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: '1',
+  });
 
   // Set up Swagger API Documentation
   const config = new DocumentBuilder()

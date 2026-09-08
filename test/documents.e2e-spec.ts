@@ -6,6 +6,7 @@ import {
   INestApplication,
   ValidationPipe,
   NotFoundException,
+  VersioningType,
 } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -50,6 +51,13 @@ describe('DocumentsController (e2e)', () => {
         transform: true,
       }),
     );
+    app.setGlobalPrefix('api', {
+      exclude: ['/', 'health', 'metrics'],
+    });
+    app.enableVersioning({
+      type: VersioningType.URI,
+      defaultVersion: '1',
+    });
     await app.init();
   });
 
@@ -61,7 +69,7 @@ describe('DocumentsController (e2e)', () => {
     jest.clearAllMocks();
   });
 
-  describe('POST /documents', () => {
+  describe('POST /api/v1/documents', () => {
     it('should successfully submit document and return 201 Created', async () => {
       documentsServiceMock.submitDocument.mockResolvedValue(mockDocument);
 
@@ -72,7 +80,7 @@ describe('DocumentsController (e2e)', () => {
       };
 
       const response = await request(app.getHttpServer())
-        .post('/documents')
+        .post('/api/v1/documents')
         .send(payload)
         .expect(201);
 
@@ -93,7 +101,7 @@ describe('DocumentsController (e2e)', () => {
       };
 
       const response = await request(app.getHttpServer())
-        .post('/documents')
+        .post('/api/v1/documents')
         .send(invalidPayload)
         .expect(400);
 
@@ -108,7 +116,7 @@ describe('DocumentsController (e2e)', () => {
 
     it('should return 400 Bad Request when body is completely empty', async () => {
       const response = await request(app.getHttpServer())
-        .post('/documents')
+        .post('/api/v1/documents')
         .send({})
         .expect(400);
 
@@ -119,7 +127,7 @@ describe('DocumentsController (e2e)', () => {
     });
   });
 
-  describe('POST /documents/upload', () => {
+  describe('POST /api/v1/documents/upload', () => {
     it('should successfully upload a .txt file with custom title and return 201 Created', async () => {
       documentsServiceMock.submitDocument.mockResolvedValue(mockDocument);
 
@@ -128,7 +136,7 @@ describe('DocumentsController (e2e)', () => {
       );
 
       const response = await request(app.getHttpServer())
-        .post('/documents/upload')
+        .post('/api/v1/documents/upload')
         .field('title', 'Custom Uploaded Title')
         .attach('file', fileBuffer, 'sample.txt')
         .expect(201);
@@ -156,7 +164,7 @@ describe('DocumentsController (e2e)', () => {
       );
 
       const response = await request(app.getHttpServer())
-        .post('/documents/upload')
+        .post('/api/v1/documents/upload')
         .attach('file', fileBuffer, 'docmind-overview.txt')
         .expect(201);
 
@@ -177,7 +185,7 @@ describe('DocumentsController (e2e)', () => {
 
     it('should return 400 Bad Request when no file is attached', async () => {
       const response = await request(app.getHttpServer())
-        .post('/documents/upload')
+        .post('/api/v1/documents/upload')
         .field('title', 'No File Attached')
         .expect(400);
 
@@ -190,7 +198,7 @@ describe('DocumentsController (e2e)', () => {
       const fileBuffer = Buffer.from('binary-content');
 
       const response = await request(app.getHttpServer())
-        .post('/documents/upload')
+        .post('/api/v1/documents/upload')
         .attach('file', fileBuffer, 'executable.exe')
         .expect(400);
 
@@ -203,7 +211,7 @@ describe('DocumentsController (e2e)', () => {
       const fileBuffer = Buffer.from('');
 
       const response = await request(app.getHttpServer())
-        .post('/documents/upload')
+        .post('/api/v1/documents/upload')
         .attach('file', fileBuffer, 'empty.txt')
         .expect(400);
 
@@ -213,7 +221,7 @@ describe('DocumentsController (e2e)', () => {
     });
   });
 
-  describe('GET /documents', () => {
+  describe('GET /api/v1/documents', () => {
     const paginatedResponse = {
       data: [mockDocument],
       meta: {
@@ -230,7 +238,7 @@ describe('DocumentsController (e2e)', () => {
       documentsServiceMock.findAll.mockResolvedValue(paginatedResponse);
 
       const response = await request(app.getHttpServer())
-        .get('/documents')
+        .get('/api/v1/documents')
         .expect(200);
 
       expect(response.body).toEqual({
@@ -270,7 +278,7 @@ describe('DocumentsController (e2e)', () => {
       documentsServiceMock.findAll.mockResolvedValue(customResponse);
 
       const response = await request(app.getHttpServer())
-        .get('/documents?page=2&limit=5&order=ASC')
+        .get('/api/v1/documents?page=2&limit=5&order=ASC')
         .expect(200);
 
       expect(response.body.meta.page).toBe(2);
@@ -287,7 +295,7 @@ describe('DocumentsController (e2e)', () => {
 
     it('should return 400 Bad Request when limit exceeds maximum of 100', async () => {
       const response = await request(app.getHttpServer())
-        .get('/documents?limit=250')
+        .get('/api/v1/documents?limit=250')
         .expect(400);
 
       expect(response.body.statusCode).toBe(400);
@@ -299,7 +307,7 @@ describe('DocumentsController (e2e)', () => {
 
     it('should return 400 Bad Request when page is less than 1', async () => {
       const response = await request(app.getHttpServer())
-        .get('/documents?page=0')
+        .get('/api/v1/documents?page=0')
         .expect(400);
 
       expect(response.body.statusCode).toBe(400);
@@ -311,7 +319,7 @@ describe('DocumentsController (e2e)', () => {
 
     it('should return 400 Bad Request when order is invalid', async () => {
       const response = await request(app.getHttpServer())
-        .get('/documents?order=INVALID')
+        .get('/api/v1/documents?order=INVALID')
         .expect(400);
 
       expect(response.body.statusCode).toBe(400);
@@ -322,12 +330,12 @@ describe('DocumentsController (e2e)', () => {
     });
   });
 
-  describe('GET /documents/:id', () => {
+  describe('GET /api/v1/documents/:id', () => {
     it('should return 200 OK with document details when found', async () => {
       documentsServiceMock.findOne.mockResolvedValue(mockDocument);
 
       const response = await request(app.getHttpServer())
-        .get(`/documents/${mockDocument.id}`)
+        .get(`/api/v1/documents/${mockDocument.id}`)
         .expect(200);
 
       expect(response.body).toEqual({
@@ -350,7 +358,7 @@ describe('DocumentsController (e2e)', () => {
       );
 
       const response = await request(app.getHttpServer())
-        .get(`/documents/${nonExistentId}`)
+        .get(`/api/v1/documents/${nonExistentId}`)
         .expect(404);
 
       expect(response.body).toEqual(
@@ -358,7 +366,7 @@ describe('DocumentsController (e2e)', () => {
           statusCode: 404,
           error: 'Not Found',
           message: `Document with ID ${nonExistentId} not found`,
-          path: `/documents/${nonExistentId}`,
+          path: `/api/v1/documents/${nonExistentId}`,
           method: 'GET',
         }),
       );
@@ -369,7 +377,7 @@ describe('DocumentsController (e2e)', () => {
     });
   });
 
-  describe('DELETE /documents/:id', () => {
+  describe('DELETE /api/v1/documents/:id', () => {
     it('should return 200 OK when document and chunks are successfully removed', async () => {
       const deleteResult = {
         message: 'Document and associated chunks deleted successfully',
@@ -378,7 +386,7 @@ describe('DocumentsController (e2e)', () => {
       documentsServiceMock.remove.mockResolvedValue(deleteResult);
 
       const response = await request(app.getHttpServer())
-        .delete(`/documents/${mockDocument.id}`)
+        .delete(`/api/v1/documents/${mockDocument.id}`)
         .expect(200);
 
       expect(response.body).toEqual(deleteResult);
@@ -395,7 +403,7 @@ describe('DocumentsController (e2e)', () => {
       );
 
       const response = await request(app.getHttpServer())
-        .delete(`/documents/${nonExistentId}`)
+        .delete(`/api/v1/documents/${nonExistentId}`)
         .expect(404);
 
       expect(response.body).toEqual(
@@ -403,7 +411,7 @@ describe('DocumentsController (e2e)', () => {
           statusCode: 404,
           error: 'Not Found',
           message: `Document with ID ${nonExistentId} not found`,
-          path: `/documents/${nonExistentId}`,
+          path: `/api/v1/documents/${nonExistentId}`,
           method: 'DELETE',
         }),
       );
@@ -414,7 +422,7 @@ describe('DocumentsController (e2e)', () => {
     });
   });
 
-  describe('GET /documents/:id/progress', () => {
+  describe('GET /api/v1/documents/:id/progress', () => {
     it('should return 200 with text/event-stream content-type and deliver SSE progress data', async () => {
       const eventData = {
         documentId: mockDocument.id,
@@ -427,7 +435,7 @@ describe('DocumentsController (e2e)', () => {
       documentsServiceMock.getProgressStream.mockReturnValue(stream$);
 
       const response = await request(app.getHttpServer())
-        .get(`/documents/${mockDocument.id}/progress`)
+        .get(`/api/v1/documents/${mockDocument.id}/progress`)
         .expect(200)
         .expect('Content-Type', /text\/event-stream/);
 
@@ -446,7 +454,7 @@ describe('DocumentsController (e2e)', () => {
       documentsServiceMock.getProgressStream.mockReturnValue(error$);
 
       const response = await request(app.getHttpServer())
-        .get(`/documents/${nonExistentId}/progress`)
+        .get(`/api/v1/documents/${nonExistentId}/progress`)
         .expect(404);
 
       expect(response.body).toEqual(

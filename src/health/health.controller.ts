@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Res,
   Optional,
+  VERSION_NEUTRAL,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -26,7 +27,10 @@ interface ServiceHealth {
 
 @Public()
 @ApiTags('Health')
-@Controller('health')
+@Controller({
+  path: 'health',
+  version: [VERSION_NEUTRAL, '1'],
+})
 export class HealthController {
   constructor(
     private readonly dataSource: DataSource,
