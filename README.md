@@ -83,12 +83,12 @@ The platform provides **Prometheus-compatible metrics** for real-time observabil
 | **Retrieval** | Hybrid Search & RRF | Combines dense vector similarity (`<->`) with PostgreSQL full-text search (`tsvector` + `GIN`) via Reciprocal Rank Fusion ($k=60$) for optimal semantic and exact-keyword recall. |
 | **RAG** | Grounded Q&A | Synthesizes verified answers strictly from top-k matching source chunks using OpenAI `gpt-4o-mini`, complete with inline `[Source N]` citations and anti-hallucination guardrails. |
 | **RAG** | Real-Time Answer Streaming | Token-by-token LLM answer streaming via Server-Sent Events (`GET /query/ask/stream` & `POST /query/ask/stream`), delivering sub-300ms Time-To-First-Token (TTFT) while preserving inline citations. |
-| **Memory** | Conversational Chat Sessions | Multi-turn chat persistence (`/chat/sessions`) with automatic query reformulation (resolves pronouns like "it", "this" via LLM contextualization before retrieval) and SSE token streaming. |
+| **Memory** | Conversational Memory & Message Pagination | Multi-turn chat persistence (`/chat/sessions`) with automatic query reformulation, paginated message history (`GET /chat/sessions/:id` & `GET /chat/sessions/:id/messages`), and SSE token streaming. |
 | **Caching** | Redis Response Cache | Deterministic SHA-256 normalized query caching with tenant key scoping delivers instant sub-millisecond responses on repeated queries (24h TTL). |
 | **Security** | API Key Auth & Rate Limiting | Dual-header API key guard (`x-api-key` / `Bearer <token>`) with `@Public()` decorator bypasses, paired with Redis-backed rate limiting via `@nestjs/throttler`. |
 | **DevOps** | Multi-Stage Docker | Hardened multi-stage `Dockerfile` (Node 20 Alpine, unprivileged `node` user) with `docker-compose.yml` orchestrating API, PostgreSQL (`pgvector`), and Redis with healthchecks. |
 | **Observability** | Prometheus + Winston | Production-grade metrics (`/metrics`) with custom histograms and counters, plus structured JSON logging with timestamps and execution deltas. |
-| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites (163 total passing tests) covering 100% of critical paths with isolated in-memory test mocks. |
+| **Quality** | Unit & E2E Testing | Complete Jest & Supertest suites (210 total passing tests: 161 unit, 49 E2E) covering 100% of critical paths with isolated in-memory test mocks. |
 | **Docs** | Interactive Swagger | Comprehensive OpenAPI spec with API Key security definitions and multipart file upload schemas at `/api/docs`. |
 
 ---
@@ -1094,17 +1094,24 @@ Retrieves a paginated list of chat sessions ordered by last activity (`updatedAt
 ```
 
 #### 16. Get Chat Session with Messages
-`GET /api/v1/chat/sessions/:id`
+`GET /api/v1/chat/sessions/:id`  
+`GET /api/v1/chat/sessions/:id?page=1&limit=50&order=ASC`
 
-Retrieves the session metadata along with its full chronological message history (`createdAt ASC`).
+Retrieves the session metadata along with paginated chronological message history (`createdAt ASC`) and pagination metadata (`messagesMeta`).
+
+**Query Parameters**
+| Parameter | Type | Default | Description |
+|:---|:---|:---|:---|
+| `page` | number | `1` | Page number (1-indexed) |
+| `limit` | number | `50` | Number of messages per page (1 to 100) |
+| `order` | string | `ASC` | Message sort direction by `createdAt` (`ASC` or `DESC`) |
 
 **Response (`200 OK`)**
 ```json
 {
   "id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
   "title": "DocMind Architecture Discussion",
-  "createdAt": "2026-09-07T10:00:00.000Z",
-  "updatedAt": "2026-09-07T10:05:00.000Z",
+  "workspaceId": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
   "messages": [
     {
       "id": "11111111-2222-3333-4444-555555555555",
@@ -1128,11 +1135,56 @@ Retrieves the session metadata along with its full chronological message history
       ],
       "createdAt": "2026-09-07T10:01:02.000Z"
     }
-  ]
+  ],
+  "messagesMeta": {
+    "page": 1,
+    "limit": 50,
+    "totalItems": 2,
+    "totalPages": 1,
+    "hasNextPage": false,
+    "hasPreviousPage": false
+  },
+  "createdAt": "2026-09-07T10:00:00.000Z",
+  "updatedAt": "2026-09-07T10:05:00.000Z"
 }
 ```
 
-#### 17. Send Message (Multi-Turn Conversational RAG)
+#### 17. List Chat Messages (Paginated)
+`GET /api/v1/chat/sessions/:id/messages?page=1&limit=50&order=ASC`
+
+Retrieves a paginated list of chat messages for a specific session without returning the outer session entity.
+
+**Query Parameters**
+| Parameter | Type | Default | Description |
+|:---|:---|:---|:---|
+| `page` | number | `1` | Page number (1-indexed) |
+| `limit` | number | `50` | Number of messages per page (1 to 100) |
+| `order` | string | `ASC` | Message sort direction by `createdAt` (`ASC` or `DESC`) |
+
+**Response (`200 OK`)**
+```json
+{
+  "data": [
+    {
+      "id": "11111111-2222-3333-4444-555555555555",
+      "sessionId": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "role": "user",
+      "content": "What is DocMind's chunking strategy?",
+      "createdAt": "2026-09-07T10:01:00.000Z"
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 50,
+    "totalItems": 2,
+    "totalPages": 1,
+    "hasNextPage": false,
+    "hasPreviousPage": false
+  }
+}
+```
+
+#### 18. Send Message (Multi-Turn Conversational RAG)
 `POST /api/v1/chat/sessions/:id/messages`
 
 Sends a user message into a chat session. The backend automatically condenses previous message turns into a standalone query via OpenAI, retrieves grounded context using Hybrid Search (RRF), synthesizes the assistant response with inline citations, and persists both turns into PostgreSQL.
@@ -1184,7 +1236,7 @@ Sends a user message into a chat session. The backend automatically condenses pr
 }
 ```
 
-#### 18. Stream Conversational Message (SSE)
+#### 19. Stream Conversational Message (SSE)
 `GET /api/v1/chat/sessions/:id/messages/stream?content=...&mode=hybrid`  
 `POST /api/v1/chat/sessions/:id/messages/stream`
 
@@ -1206,7 +1258,7 @@ curl -N -X POST http://localhost:3000/api/v1/chat/sessions/e3b0c442-98fc-1c14-9a
   -d '{"content": "What is its default overlap size?", "mode": "hybrid", "limit": 3}'
 ```
 
-#### 19. Delete Chat Session
+#### 20. Delete Chat Session
 `DELETE /api/v1/chat/sessions/:id`
 
 Deletes the session and cascade deletes all contained messages.
@@ -1223,7 +1275,7 @@ Deletes the session and cascade deletes all contained messages.
 
 ### Observability Endpoints
 
-#### 20. Prometheus Metrics
+#### 21. Prometheus Metrics
 `GET /metrics`
 
 Returns all application and runtime metrics in Prometheus exposition format. Includes both default Node.js metrics (heap, GC, event loop) and custom RAG pipeline metrics.
@@ -1261,7 +1313,7 @@ vector_search_latency_seconds_sum 0.386
 vector_search_latency_seconds_count 42
 ```
 
-#### 21. Health Check
+#### 22. Health Check
 `GET /health`
 
 Performs active probes against PostgreSQL and Redis, reporting uptime, memory usage, and component latency. Returns HTTP 200 when healthy or HTTP 503 if any dependency is degraded.

@@ -19,6 +19,7 @@ describe('ChatController - Conversational Memory (e2e)', () => {
     createSession: jest.fn(),
     listSessions: jest.fn(),
     getSessionWithMessages: jest.fn(),
+    listMessages: jest.fn(),
     deleteSession: jest.fn(),
     sendMessage: jest.fn(),
     sendMessageStream: jest.fn(),
@@ -134,9 +135,71 @@ describe('ChatController - Conversational Memory (e2e)', () => {
       expect(response.body.messages).toHaveLength(2);
     });
 
+    it('should support pagination query params', async () => {
+      chatServiceMock.getSessionWithMessages.mockResolvedValue({
+        id: sampleSessionId,
+        title: 'DocMind Discussion',
+        messages: [{ id: 'm1', role: 'user', content: 'What is DocMind?' }],
+        messagesMeta: {
+          page: 1,
+          limit: 1,
+          totalItems: 2,
+          totalPages: 2,
+          hasNextPage: true,
+          hasPreviousPage: false,
+        },
+      });
+
+      const response = await request(app.getHttpServer())
+        .get(
+          `/api/v1/chat/sessions/${sampleSessionId}?page=1&limit=1&order=ASC`,
+        )
+        .set('x-api-key', 'test-api-key')
+        .expect(200);
+
+      expect(response.body.id).toBe(sampleSessionId);
+      expect(response.body.messages).toHaveLength(1);
+      expect(response.body.messagesMeta.totalItems).toBe(2);
+      expect(chatServiceMock.getSessionWithMessages).toHaveBeenCalled();
+    });
+
     it('should return 400 when session id is not a valid UUID', async () => {
       await request(app.getHttpServer())
         .get('/api/v1/chat/sessions/invalid-not-uuid')
+        .set('x-api-key', 'test-api-key')
+        .expect(400);
+    });
+  });
+
+  describe('GET /api/v1/chat/sessions/:id/messages', () => {
+    it('should return 200 OK with paginated messages', async () => {
+      chatServiceMock.listMessages.mockResolvedValue({
+        data: [{ id: 'm1', role: 'user', content: 'What is DocMind?' }],
+        meta: {
+          page: 1,
+          limit: 10,
+          totalItems: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+      });
+
+      const response = await request(app.getHttpServer())
+        .get(
+          `/api/v1/chat/sessions/${sampleSessionId}/messages?page=1&limit=10&order=ASC`,
+        )
+        .set('x-api-key', 'test-api-key')
+        .expect(200);
+
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.meta.totalItems).toBe(1);
+      expect(chatServiceMock.listMessages).toHaveBeenCalled();
+    });
+
+    it('should return 400 when session id is not a valid UUID', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/chat/sessions/invalid-not-uuid/messages')
         .set('x-api-key', 'test-api-key')
         .expect(400);
     });

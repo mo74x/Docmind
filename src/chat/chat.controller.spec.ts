@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/unbound-method */
 import { Test, TestingModule } from '@nestjs/testing';
 import { ChatController } from './chat.controller';
@@ -13,6 +15,7 @@ describe('ChatController', () => {
     createSession: jest.Mock;
     listSessions: jest.Mock;
     getSessionWithMessages: jest.Mock;
+    listMessages: jest.Mock;
     deleteSession: jest.Mock;
     sendMessage: jest.Mock;
     sendMessageStream: jest.Mock;
@@ -23,6 +26,7 @@ describe('ChatController', () => {
       createSession: jest.fn(),
       listSessions: jest.fn(),
       getSessionWithMessages: jest.fn(),
+      listMessages: jest.fn(),
       deleteSession: jest.fn(),
       sendMessage: jest.fn(),
       sendMessageStream: jest.fn(),
@@ -81,16 +85,50 @@ describe('ChatController', () => {
     expect(result).toEqual(mockList);
   });
 
-  it('should get session with messages', async () => {
-    const mockSession = { id: 'sess-1', messages: [] };
+  it('should get session with messages and pagination', async () => {
+    const mockSession = {
+      id: 'sess-1',
+      messages: [],
+      messagesMeta: { page: 1, limit: 50, totalItems: 0 },
+    };
     chatServiceMock.getSessionWithMessages.mockResolvedValue(mockSession);
 
-    const result = await controller.getSession('sess-1', null);
+    const paginationDto = { page: 1, limit: 50, order: 'ASC' as const };
+    const result = await controller.getSession('sess-1', paginationDto, null);
     expect(chatServiceMock.getSessionWithMessages).toHaveBeenCalledWith(
       'sess-1',
+      paginationDto,
       null,
     );
     expect(result).toEqual(mockSession);
+  });
+
+  it('should support backwards-compatible 2-argument getSession call', async () => {
+    const mockSession = { id: 'sess-1', messages: [] };
+    chatServiceMock.getSessionWithMessages.mockResolvedValue(mockSession);
+
+    // Call as getSession(id, workspaceId)
+    const result = await (controller.getSession as any)('sess-1', null);
+    expect(chatServiceMock.getSessionWithMessages).toHaveBeenCalled();
+    expect(result).toEqual(mockSession);
+  });
+
+  it('should list messages in a session with pagination', async () => {
+    const mockList = {
+      data: [{ id: 'm1', content: 'hello' }],
+      meta: { page: 1, limit: 20, totalItems: 1 },
+    };
+    chatServiceMock.listMessages.mockResolvedValue(mockList);
+
+    const paginationDto = { page: 1, limit: 20, order: 'ASC' as const };
+    const result = await controller.listMessages('sess-1', paginationDto, null);
+
+    expect(chatServiceMock.listMessages).toHaveBeenCalledWith(
+      'sess-1',
+      paginationDto,
+      null,
+    );
+    expect(result).toEqual(mockList);
   });
 
   it('should delete a session', async () => {

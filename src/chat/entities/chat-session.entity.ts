@@ -8,6 +8,7 @@ import {
   Index,
 } from 'typeorm';
 import { ChatMessage } from './chat-message.entity';
+import { PaginationMetaDto } from '../../common/dto/paginated-response.dto';
 
 @Entity('chat_sessions')
 export class ChatSession {
@@ -26,6 +27,8 @@ export class ChatSession {
     onDelete: 'CASCADE',
   })
   messages: ChatMessage[];
+
+  messagesMeta?: PaginationMetaDto;
 
   @CreateDateColumn()
   createdAt: Date;

@@ -30,7 +30,9 @@ import { SendMessageDto } from './dto/send-message.dto';
 import { StreamMessageQueryDto } from './dto/stream-message-query.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import { MessagePaginationDto } from './dto/message-pagination.dto';
 import { ChatSession } from './entities/chat-session.entity';
+import { ChatMessage } from './entities/chat-message.entity';
 import { CurrentWorkspaceId } from '../auth/decorators/current-workspace.decorator';
 
 @ApiTags('Chat & Conversational Memory')
@@ -71,20 +73,53 @@ export class ChatController {
 
   @Get('sessions/:id')
   @ApiOperation({
-    summary: 'Retrieve a chat session with full chronological message history',
+    summary:
+      'Retrieve a chat session with paginated chronological message history',
   })
   @ApiParam({ name: 'id', description: 'UUID of the chat session' })
   @ApiResponse({
     status: 200,
-    description: 'Chat session with messages',
+    description:
+      'Chat session with messages and messagesMeta pagination metadata',
     type: ChatSession,
   })
   @ApiResponse({ status: 404, description: 'Chat session not found' })
   async getSession(
     @Param('id', ParseUUIDPipe) id: string,
+    @Query() paginationDto: MessagePaginationDto,
     @CurrentWorkspaceId() workspaceId: string | null,
   ): Promise<ChatSession> {
-    return this.chatService.getSessionWithMessages(id, workspaceId);
+    if (typeof paginationDto === 'string' || paginationDto === null) {
+      return this.chatService.getSessionWithMessages(
+        id,
+        new MessagePaginationDto(),
+        paginationDto,
+      );
+    }
+    return this.chatService.getSessionWithMessages(
+      id,
+      paginationDto,
+      workspaceId,
+    );
+  }
+
+  @Get('sessions/:id/messages')
+  @ApiOperation({
+    summary: 'List messages in a chat session with pagination',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the chat session' })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of chat messages',
+    type: PaginatedResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Chat session not found' })
+  async listMessages(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() paginationDto: MessagePaginationDto,
+    @CurrentWorkspaceId() workspaceId: string | null,
+  ): Promise<PaginatedResponseDto<ChatMessage>> {
+    return this.chatService.listMessages(id, paginationDto, workspaceId);
   }
 
   @Delete('sessions/:id')

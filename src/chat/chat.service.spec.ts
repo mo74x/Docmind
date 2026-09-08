@@ -25,6 +25,7 @@ describe('ChatService', () => {
   let messageRepoMock: {
     create: jest.Mock;
     save: jest.Mock;
+    findAndCount: jest.Mock;
   };
   let queryServiceMock: {
     search: jest.Mock;
@@ -71,6 +72,7 @@ describe('ChatService', () => {
           ...entity,
         }),
       ),
+      findAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
 
     queryServiceMock = {
@@ -188,26 +190,53 @@ describe('ChatService', () => {
   });
 
   describe('getSessionWithMessages', () => {
-    it('should return the session with chronologically ordered messages', async () => {
+    it('should return the session with paginated messages and messagesMeta', async () => {
       const mockSession = {
         id: 'sess-1',
         title: 'DocMind Chat',
         workspaceId: null,
-        messages: [
-          { id: 'm1', role: 'user', content: 'Hi' },
-          { id: 'm2', role: 'assistant', content: 'Hello!' },
-        ],
       };
-      sessionRepoMock.findOne.mockResolvedValue(mockSession);
+      const mockMessages = [
+        { id: 'm1', role: 'user', content: 'Hi' },
+        { id: 'm2', role: 'assistant', content: 'Hello!' },
+      ];
+      sessionRepoMock.findOne.mockResolvedValue({ ...mockSession });
+      messageRepoMock.findAndCount.mockResolvedValue([mockMessages, 2]);
 
       const result = await service.getSessionWithMessages('sess-1');
 
       expect(sessionRepoMock.findOne).toHaveBeenCalledWith({
         where: { id: 'sess-1' },
-        relations: { messages: true },
-        order: { messages: { createdAt: 'ASC' } },
+      });
+      expect(messageRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: { sessionId: 'sess-1' },
+        order: { createdAt: 'ASC' },
+        skip: 0,
+        take: 50,
       });
       expect(result.messages).toHaveLength(2);
+      expect(result.messagesMeta).toBeDefined();
+      expect(result.messagesMeta?.totalItems).toBe(2);
+      expect(result.messagesMeta?.page).toBe(1);
+    });
+
+    it('should respect custom pagination parameters and sort order', async () => {
+      const mockSession = { id: 'sess-1', workspaceId: null };
+      sessionRepoMock.findOne.mockResolvedValue({ ...mockSession });
+      messageRepoMock.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.getSessionWithMessages('sess-1', {
+        page: 2,
+        limit: 10,
+        order: 'DESC',
+      });
+
+      expect(messageRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: { sessionId: 'sess-1' },
+        order: { createdAt: 'DESC' },
+        skip: 10,
+        take: 10,
+      });
     });
 
     it('should throw NotFoundException if session does not exist', async () => {
@@ -222,12 +251,64 @@ describe('ChatService', () => {
       const mockSession = {
         id: 'sess-1',
         workspaceId: 'ws-alpha',
-        messages: [],
       };
       sessionRepoMock.findOne.mockResolvedValue(mockSession);
 
       await expect(
         service.getSessionWithMessages('sess-1', 'ws-beta'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('listMessages', () => {
+    it('should return paginated messages for a session', async () => {
+      const mockSession = { id: 'sess-1', workspaceId: null };
+      const mockMessages = [
+        { id: 'm1', role: 'user', content: 'What is RAG?' },
+        {
+          id: 'm2',
+          role: 'assistant',
+          content: 'Retrieval-Augmented Generation',
+        },
+      ];
+      sessionRepoMock.findOne.mockResolvedValue(mockSession);
+      messageRepoMock.findAndCount.mockResolvedValue([mockMessages, 2]);
+
+      const result = await service.listMessages('sess-1', {
+        page: 1,
+        limit: 20,
+        order: 'ASC',
+      });
+
+      expect(sessionRepoMock.findOne).toHaveBeenCalledWith({
+        where: { id: 'sess-1' },
+      });
+      expect(messageRepoMock.findAndCount).toHaveBeenCalledWith({
+        where: { sessionId: 'sess-1' },
+        order: { createdAt: 'ASC' },
+        skip: 0,
+        take: 20,
+      });
+      expect(result.data).toHaveLength(2);
+      expect(result.meta.totalItems).toBe(2);
+    });
+
+    it('should throw NotFoundException if session does not exist', async () => {
+      sessionRepoMock.findOne.mockResolvedValue(null);
+
+      await expect(service.listMessages('non-existent')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw NotFoundException if session belongs to different workspace', async () => {
+      sessionRepoMock.findOne.mockResolvedValue({
+        id: 'sess-1',
+        workspaceId: 'ws-1',
+      });
+
+      await expect(
+        service.listMessages('sess-1', undefined, 'ws-2'),
       ).rejects.toThrow(NotFoundException);
     });
   });
@@ -352,6 +433,10 @@ describe('ChatService', () => {
         ],
       };
       sessionRepoMock.findOne.mockResolvedValue(mockSession);
+      messageRepoMock.findAndCount.mockResolvedValue([
+        mockSession.messages,
+        mockSession.messages.length,
+      ]);
 
       // Mock reformulation response
       openaiCreateMock

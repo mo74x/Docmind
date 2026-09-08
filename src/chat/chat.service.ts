@@ -16,7 +16,11 @@ import { AnswerSource } from '../query/answer.service';
 import { CreateChatSessionDto } from './dto/create-chat-session.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
-import { PaginatedResponseDto } from '../common/dto/paginated-response.dto';
+import {
+  PaginatedResponseDto,
+  PaginationMetaDto,
+} from '../common/dto/paginated-response.dto';
+import { MessagePaginationDto } from './dto/message-pagination.dto';
 
 export interface SendMessageResponse {
   sessionId: string;
@@ -114,22 +118,29 @@ export class ChatService {
   }
 
   /**
-   * Retrieve a chat session with all messages ordered chronologically
+   * Retrieve a chat session with paginated messages ordered chronologically
    */
   async getSessionWithMessages(
     sessionId: string,
-    workspaceId?: string | null,
+    paginationOrWorkspaceId?: MessagePaginationDto | string | null,
+    workspaceIdParam?: string | null,
   ): Promise<ChatSession> {
+    let paginationDto: MessagePaginationDto;
+    let workspaceId: string | null | undefined;
+
+    if (
+      typeof paginationOrWorkspaceId === 'string' ||
+      paginationOrWorkspaceId === null
+    ) {
+      paginationDto = new MessagePaginationDto();
+      workspaceId = paginationOrWorkspaceId;
+    } else {
+      paginationDto = paginationOrWorkspaceId || new MessagePaginationDto();
+      workspaceId = workspaceIdParam;
+    }
+
     const session = await this.sessionRepo.findOne({
       where: { id: sessionId },
-      relations: {
-        messages: true,
-      },
-      order: {
-        messages: {
-          createdAt: 'ASC',
-        },
-      },
     });
 
     if (!session) {
@@ -140,7 +151,58 @@ export class ChatService {
       throw new NotFoundException(`Chat session ${sessionId} not found`);
     }
 
+    const page = paginationDto.page || 1;
+    const limit = paginationDto.limit || 50;
+    const order = paginationDto.order || 'ASC';
+    const skip = (page - 1) * limit;
+
+    const [messages, total] = await this.messageRepo.findAndCount({
+      where: { sessionId },
+      order: { createdAt: order },
+      skip,
+      take: limit,
+    });
+
+    session.messages = messages;
+    session.messagesMeta = new PaginationMetaDto(total, page, limit);
+
     return session;
+  }
+
+  /**
+   * List messages in a chat session with pagination
+   */
+  async listMessages(
+    sessionId: string,
+    paginationDto?: MessagePaginationDto,
+    workspaceId?: string | null,
+  ): Promise<PaginatedResponseDto<ChatMessage>> {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new NotFoundException(`Chat session ${sessionId} not found`);
+    }
+
+    if (workspaceId && session.workspaceId !== workspaceId) {
+      throw new NotFoundException(`Chat session ${sessionId} not found`);
+    }
+
+    const pagination = paginationDto || new MessagePaginationDto();
+    const page = pagination.page || 1;
+    const limit = pagination.limit || 50;
+    const order = pagination.order || 'ASC';
+    const skip = (page - 1) * limit;
+
+    const [messages, total] = await this.messageRepo.findAndCount({
+      where: { sessionId },
+      order: { createdAt: order },
+      skip,
+      take: limit,
+    });
+
+    return new PaginatedResponseDto(messages, total, page, limit);
   }
 
   /**
