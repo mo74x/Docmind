@@ -8,6 +8,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
+import compression from 'compression';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
@@ -18,6 +19,17 @@ describe('AppController (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    app.use(
+      compression({
+        threshold: 1024,
+        filter: (req, res) => {
+          if (req.headers['accept'] === 'text/event-stream') {
+            return false;
+          }
+          return compression.filter(req, res);
+        },
+      }),
+    );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalPipes(
       new ValidationPipe({
@@ -44,6 +56,25 @@ describe('AppController (e2e)', () => {
       .get('/')
       .expect(200)
       .expect('Hello World!');
+  });
+
+  it('/ (GET) serves uncompressed response for small payloads under threshold', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/')
+      .set('Accept-Encoding', 'gzip');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
+  });
+
+  it('bypasses compression when Accept header is text/event-stream', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/')
+      .set('Accept', 'text/event-stream')
+      .set('Accept-Encoding', 'gzip');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
   });
 
   it('/non-existent-route (GET) returns 404 formatted by AllExceptionsFilter', () => {

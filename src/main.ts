@@ -9,6 +9,7 @@ import * as winston from 'winston';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import helmet from 'helmet';
+import compression from 'compression';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -62,6 +63,19 @@ async function bootstrap() {
     ],
     credentials: true,
   });
+
+  // Enable HTTP response compression (gzip/deflate), bypassing Server-Sent Events (SSE)
+  app.use(
+    compression({
+      threshold: 1024,
+      filter: (req, res) => {
+        if (req.headers['accept'] === 'text/event-stream') {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+    }),
+  );
 
   // Enable graceful shutdown hooks
   app.enableShutdownHooks();
